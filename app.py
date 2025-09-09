@@ -1,7 +1,7 @@
 import gradio as gr
 import re
 import difflib
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from src.llm import LLMProcessor
 import logging
 
@@ -32,9 +32,13 @@ def extract_entities(annotated_text: str) -> List[Tuple[str, str]]:
     pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     return re.findall(pattern, annotated_text)
 
-def create_entity_visualization(annotated_text: str) -> str:
-    """Create a visual representation of entities with color coding."""
-    entities = extract_entities(annotated_text)
+def create_entity_visualization(ner_result: Dict[str, Any]) -> str:
+    """Create a visual representation of entities with color coding and Wikidata information."""
+    if not ner_result or "entities" not in ner_result:
+        return "No entities found."
+    
+    annotated_text = ner_result.get("annotated_text", "")
+    entities = ner_result.get("entities", [])
     
     # Create a color map for different entity types
     colors = [
@@ -42,18 +46,160 @@ def create_entity_visualization(annotated_text: str) -> str:
         "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9"
     ]
     
-    unique_labels = list(set(label for _, label in entities))
+    unique_labels = list(set(entity.get("label", "") for entity in entities))
     color_map = {label: colors[i % len(colors)] for i, label in enumerate(unique_labels)}
     
-    # Replace annotations with colored HTML spans
+    # Replace annotations with enriched HTML spans
     result = annotated_text
-    for entity, label in entities:
-        color = color_map[label]
-        original_pattern = f"[{re.escape(entity)}]({re.escape(label)})"
-        replacement = f'<span style="background-color: {color}; padding: 2px 4px; border-radius: 3px; font-weight: bold;">{entity} <sub style="font-size: 0.8em;">({label})</sub></span>'
-        result = result.replace(f"[{entity}]({label})", replacement, 1)
+    for entity in entities:
+        entity_text = entity.get("text", "")
+        label = entity.get("label", "")
+        wikidata_id = entity.get("wikidata_id", "")
+        description = entity.get("description", "")
+        confidence = entity.get("confidence", 0.0)
+        
+        color = color_map.get(label, "#CCCCCC")
+        
+        # Create tooltip with entity information
+        tooltip_content = f"Type: {label}"
+        if wikidata_id:
+            tooltip_content += f"\\nWikidata: {wikidata_id}"
+        if description:
+            tooltip_content += f"\\nDescription: {description}"
+        tooltip_content += f"\\nConfidence: {confidence:.2f}"
+        
+        # Create Wikidata link if available
+        wikidata_link = ""
+        if wikidata_id:
+            wikidata_link = f' <a href="https://www.wikidata.org/wiki/{wikidata_id}" target="_blank" style="text-decoration: none; color: #0645ad;">🔗</a>'
+        
+        # Confidence indicator
+        confidence_color = "#00AA00" if confidence > 0.8 else "#FFAA00" if confidence > 0.6 else "#FF6B6B"
+        confidence_indicator = f'<span style="color: {confidence_color}; font-size: 0.8em;">●</span>'
+        
+        original_pattern = f"[{re.escape(entity_text)}]({re.escape(label)})"
+        replacement = f'''<span style="background-color: {color}; padding: 2px 4px; border-radius: 3px; font-weight: bold; cursor: help;" 
+                          title="{tooltip_content}">
+                          {entity_text} 
+                          <sub style="font-size: 0.7em;">({label})</sub>
+                          {confidence_indicator}
+                          {wikidata_link}
+                        </span>'''
+        
+        result = result.replace(f"[{entity_text}]({label})", replacement, 1)
     
     return result
+
+def create_entity_table(ner_result: Dict[str, Any]) -> str:
+    """Create an HTML table for entity validation and editing."""
+    if not ner_result or "entities" not in ner_result:
+        return "<p>No entities to validate.</p>"
+    
+    entities = ner_result.get("entities", [])
+    if not entities:
+        return "<p>No entities found.</p>"
+    
+    # Create HTML table
+    table_html = """
+    <style>
+        .entity-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: Arial, sans-serif;
+            margin: 10px 0;
+        }
+        .entity-table th, .entity-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .entity-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        .entity-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .confidence-high { color: #00AA00; font-weight: bold; }
+        .confidence-medium { color: #FFAA00; font-weight: bold; }
+        .confidence-low { color: #FF6B6B; font-weight: bold; }
+        .wikidata-link { 
+            color: #0645ad; 
+            text-decoration: none; 
+            font-weight: bold;
+        }
+        .wikidata-link:hover { text-decoration: underline; }
+    </style>
+    <table class="entity-table">
+        <thead>
+            <tr>
+                <th>Entity</th>
+                <th>Type</th>
+                <th>Position</th>
+                <th>Confidence</th>
+                <th>Wikidata ID</th>
+                <th>Description</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    
+    for i, entity in enumerate(entities):
+        entity_text = entity.get("text", "")
+        label = entity.get("label", "")
+        start_pos = entity.get("start_pos", 0)
+        end_pos = entity.get("end_pos", 0)
+        wikidata_id = entity.get("wikidata_id", "")
+        description = entity.get("description", "")
+        confidence = entity.get("confidence", 0.0)
+        
+        # Confidence styling
+        if confidence > 0.8:
+            confidence_class = "confidence-high"
+        elif confidence > 0.6:
+            confidence_class = "confidence-medium"
+        else:
+            confidence_class = "confidence-low"
+        
+        # Wikidata link
+        wikidata_cell = ""
+        if wikidata_id:
+            wikidata_cell = f'<a href="https://www.wikidata.org/wiki/{wikidata_id}" target="_blank" class="wikidata-link">{wikidata_id}</a>'
+        else:
+            wikidata_cell = "<em>Not found</em>"
+        
+        # Truncate long descriptions
+        if len(description) > 60:
+            description = description[:57] + "..."
+        
+        table_html += f"""
+            <tr>
+                <td><strong>{entity_text}</strong></td>
+                <td>{label}</td>
+                <td>{start_pos}-{end_pos}</td>
+                <td class="{confidence_class}">{confidence:.2f}</td>
+                <td>{wikidata_cell}</td>
+                <td>{description}</td>
+                <td>
+                    <button onclick="alert('Entity validation feature coming soon!')" style="background: #4CAF50; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer;">✓</button>
+                    <button onclick="alert('Entity editing feature coming soon!')" style="background: #ff9800; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer;">✏️</button>
+                </td>
+            </tr>
+        """
+    
+    table_html += """
+        </tbody>
+    </table>
+    <p style="font-size: 0.9em; color: #666;">
+        <strong>Legend:</strong> 
+        <span class="confidence-high">●</span> High confidence (>0.8) |
+        <span class="confidence-medium">●</span> Medium confidence (0.6-0.8) |
+        <span class="confidence-low">●</span> Low confidence (<0.6)
+    </p>
+    """
+    
+    return table_html
 
 def create_text_diff(original: str, annotated: str) -> str:
     """Create a side-by-side diff view of original and processed text."""
@@ -76,35 +222,40 @@ def create_text_diff(original: str, annotated: str) -> str:
     
     return f"```diff\n{diff_text}\n```"
 
-def process_ner(text: str, labels_text: str) -> Tuple[str, str, str]:
-    """Process the text for NER and return all three outputs."""
+def process_ner(text: str, labels_text: str) -> Tuple[str, str, str, str]:
+    """Process the text for NER and return all four outputs."""
     if not text.strip():
-        return "Please enter some text to process.", "", ""
+        return "Please enter some text to process.", "", "", ""
     
     if not labels_text.strip():
-        return "Please enter at least one entity label.", "", ""
+        return "Please enter at least one entity label.", "", "", ""
     
     try:
         # Parse labels
         labels = parse_labels_input(labels_text)
         
         if not labels:
-            return "Please enter valid entity labels separated by commas.", "", ""
+            return "Please enter valid entity labels separated by commas.", "", "", ""
         
         # Perform NER
         logger.info(f"Processing text with labels: {labels}")
-        annotated_text = llm_processor.perform_ner(text, labels)
+        ner_result = llm_processor.perform_ner(text, labels)
+        print(ner_result)
+        
+        # Extract annotated text
+        annotated_text = ner_result.get("annotated_text", text)
         
         # Create visualizations
-        visualization = create_entity_visualization(annotated_text)
+        visualization = create_entity_visualization(ner_result)
+        entity_table = create_entity_table(ner_result)
         diff_output = create_text_diff(text, annotated_text)
         
-        return annotated_text, visualization, diff_output
+        return annotated_text, visualization, entity_table, diff_output
         
     except Exception as e:
         error_msg = f"Error processing text: {str(e)}"
         logger.error(error_msg)
-        return error_msg, "", ""
+        return error_msg, "", "", ""
 
 def update_example_labels():
     """Provide example labels for common NER tasks."""
@@ -113,10 +264,17 @@ def update_example_labels():
 # Create Gradio interface
 with gr.Blocks(title="NER Demo with LLM", theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
-    # Named Entity Recognition Demo
+    # Named Entity Recognition Demo with Wikidata Grounding
     
-    This app uses a Large Language Model to perform Named Entity Recognition (NER) on your text. 
-    You can specify custom entity labels and see the results in multiple formats.
+    This app uses a Large Language Model with grounding tools to perform Named Entity Recognition (NER) on your text. 
+    It identifies entities, finds their Wikidata IDs, and provides confidence scores for validation.
+    
+    **Features:**
+    - 🎯 Custom entity labels
+    - 🌐 Wikidata ID resolution with grounding
+    - 📊 Confidence scoring
+    - ✅ Entity validation interface
+    - 🔗 Direct links to Wikidata entries
     """)
     
     with gr.Row():
@@ -155,10 +313,16 @@ with gr.Blocks(title="NER Demo with LLM", theme=gr.themes.Soft()) as demo:
                 with gr.Tab("🎨 Visualization"):
                     visualization_output = gr.HTML(
                         label="Entity Visualization",
-                        value="<p style='color: #666; font-style: italic;'>Processed text will appear here with color-coded entities</p>"
+                        value="<p style='color: #666; font-style: italic;'>Processed text will appear here with color-coded entities and Wikidata links</p>"
                     )
                 
-                with gr.Tab("🔍 Text Diff"):
+                with gr.Tab("🔍 Entity Validation"):
+                    entity_table_output = gr.HTML(
+                        label="Entity Validation Table",
+                        value="<p style='color: #666; font-style: italic;'>Entity validation table with Wikidata IDs and confidence scores will appear here</p>"
+                    )
+                
+                with gr.Tab("📊 Text Diff"):
                     diff_output = gr.Markdown(
                         label="Difference View",
                         value="*Text differences will appear here*"
@@ -176,7 +340,7 @@ with gr.Blocks(title="NER Demo with LLM", theme=gr.themes.Soft()) as demo:
     process_btn.click(
         fn=process_ner,
         inputs=[text_input, labels_input],
-        outputs=[markdown_output, visualization_output, diff_output]
+        outputs=[markdown_output, visualization_output, entity_table_output, diff_output]
     )
     
     example_btn.click(
@@ -188,13 +352,13 @@ with gr.Blocks(title="NER Demo with LLM", theme=gr.themes.Soft()) as demo:
     text_input.submit(
         fn=process_ner,
         inputs=[text_input, labels_input],
-        outputs=[markdown_output, visualization_output, diff_output]
+        outputs=[markdown_output, visualization_output, entity_table_output, diff_output]
     )
     
     labels_input.submit(
         fn=process_ner,
         inputs=[text_input, labels_input],
-        outputs=[markdown_output, visualization_output, diff_output]
+        outputs=[markdown_output, visualization_output, entity_table_output, diff_output]
     )
 
 if __name__ == "__main__":
