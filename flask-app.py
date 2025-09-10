@@ -37,16 +37,69 @@ def extract_entities(annotated_text: str) -> List[Tuple[str, str]]:
     pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     return re.findall(pattern, annotated_text)
 
-def get_wikidata_coordinates(wikidata_id: str) -> Dict[str, Any]:
-    """Get geographic coordinates for a Wikidata entity."""
+def compare_entity_names(extracted_name: str, wikidata_name: str) -> Dict[str, Any]:
+    """Compare extracted entity name with Wikidata name and return match status."""
+    if not extracted_name or not wikidata_name:
+        return {
+            'status': 'unknown',
+            'similarity': 0.0,
+            'message': 'Missing name data for comparison'
+        }
+    
+    # Normalize names for comparison
+    extracted_norm = extracted_name.lower().strip()
+    wikidata_norm = wikidata_name.lower().strip()
+    
+    # Exact match
+    if extracted_norm == wikidata_norm:
+        return {
+            'status': 'exact_match',
+            'similarity': 1.0,
+            'message': 'Exact match'
+        }
+    
+    # Calculate similarity using difflib
+    similarity = difflib.SequenceMatcher(None, extracted_norm, wikidata_norm).ratio()
+    
+    # Check if one name contains the other (common for abbreviations or full names)
+    contains_match = (extracted_norm in wikidata_norm) or (wikidata_norm in extracted_norm)
+    
+    # Determine status based on similarity and containment
+    if similarity >= 0.9 or contains_match:
+        return {
+            'status': 'very_similar',
+            'similarity': similarity,
+            'message': 'Very similar or partial match'
+        }
+    elif similarity >= 0.7:
+        return {
+            'status': 'similar',
+            'similarity': similarity,
+            'message': 'Similar names'
+        }
+    elif similarity >= 0.4:
+        return {
+            'status': 'somewhat_similar',
+            'similarity': similarity,
+            'message': 'Somewhat similar'
+        }
+    else:
+        return {
+            'status': 'different',
+            'similarity': similarity,
+            'message': 'Different names'
+        }
+
+def get_wikidata_entity_info(wikidata_id: str) -> Dict[str, Any]:
+    """Get entity information including label and coordinates from Wikidata."""
     try:
-        # SPARQL query to get coordinates
+        # SPARQL query to get both label and coordinates (coordinates are optional)
         sparql_url = "https://query.wikidata.org/sparql"
         
         query = f"""
-        SELECT ?item ?itemLabel ?coord WHERE {{
+        SELECT ?item ?itemLabel ?itemDescription ?coord WHERE {{
           VALUES ?item {{ wd:{wikidata_id} }}
-          ?item wdt:P625 ?coord.
+          OPTIONAL {{ ?item wdt:P625 ?coord. }}
           SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
         }}
         """
@@ -63,28 +116,39 @@ def get_wikidata_coordinates(wikidata_id: str) -> Dict[str, Any]:
         
         if data.get('results', {}).get('bindings'):
             binding = data['results']['bindings'][0]
-            coord_value = binding.get('coord', {}).get('value', '')
             
-            # Parse coordinate string like "Point(longitude latitude)"
-            import re
-            coord_match = re.search(r'Point\(([+-]?\d+\.?\d*)\s+([+-]?\d+\.?\d*)\)', coord_value)
-            if coord_match:
-                longitude = float(coord_match.group(1))
-                latitude = float(coord_match.group(2))
-                
-                return {
-                    'wikidata_id': wikidata_id,
-                    'label': binding.get('itemLabel', {}).get('value', ''),
-                    'latitude': latitude,
-                    'longitude': longitude,
-                    'coordinate_string': coord_value
-                }
+            result = {
+                'wikidata_id': wikidata_id,
+                'label': binding.get('itemLabel', {}).get('value', ''),
+                'description': binding.get('itemDescription', {}).get('value', '')
+            }
+            
+            # Handle coordinates if present
+            coord_value = binding.get('coord', {}).get('value', '')
+            if coord_value:
+                # Parse coordinate string like "Point(longitude latitude)"
+                import re
+                coord_match = re.search(r'Point\(([+-]?\d+\.?\d*)\s+([+-]?\d+\.?\d*)\)', coord_value)
+                if coord_match:
+                    result['longitude'] = float(coord_match.group(1))
+                    result['latitude'] = float(coord_match.group(2))
+                    result['coordinate_string'] = coord_value
+            
+            return result
         
         return {}
         
     except Exception as e:
-        logger.error(f"Error fetching coordinates for {wikidata_id}: {e}")
+        logger.error(f"Error fetching entity info for {wikidata_id}: {e}")
         return {}
+
+def get_wikidata_coordinates(wikidata_id: str) -> Dict[str, Any]:
+    """Get geographic coordinates for a Wikidata entity (backward compatibility)."""
+    info = get_wikidata_entity_info(wikidata_id)
+    # Filter to only return coordinate-related fields for backward compatibility
+    if 'latitude' in info and 'longitude' in info:
+        return {k: v for k, v in info.items() if k in ['wikidata_id', 'label', 'latitude', 'longitude', 'coordinate_string']}
+    return {}
 
 def search_wikidata(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Search Wikidata for entities matching the query."""
@@ -266,6 +330,72 @@ def get_entities_coordinates():
     except Exception as e:
         logger.error(f"Error getting entity coordinates: {e}")
         return jsonify({'error': f'Failed to get coordinates: {str(e)}'}), 500
+
+@app.route('/api/entities/enrich', methods=['POST'])
+def enrich_entities():
+    """Enrich entities with Wikidata information and name comparison."""
+    try:
+        data = request.get_json()
+        entities = data.get('entities', [])
+        
+        enriched_entities = []
+        
+        for entity in entities:
+            enriched_entity = entity.copy()
+            wikidata_id = entity.get('wikidata_id', '').strip()
+            
+            if wikidata_id and wikidata_id.startswith('Q'):
+                logger.info(f"Fetching Wikidata info for {wikidata_id}")
+                wikidata_info = get_wikidata_entity_info(wikidata_id)
+                
+                if wikidata_info:
+                    # Add Wikidata information
+                    enriched_entity['wikidata_label'] = wikidata_info.get('label', '')
+                    enriched_entity['wikidata_description'] = wikidata_info.get('description', '')
+                    
+                    # Add coordinates if available
+                    if 'latitude' in wikidata_info and 'longitude' in wikidata_info:
+                        enriched_entity['latitude'] = wikidata_info['latitude']
+                        enriched_entity['longitude'] = wikidata_info['longitude']
+                        enriched_entity['coordinate_string'] = wikidata_info.get('coordinate_string', '')
+                    
+                    # Compare names
+                    extracted_name = entity.get('text', '')
+                    wikidata_name = wikidata_info.get('label', '')
+                    name_comparison = compare_entity_names(extracted_name, wikidata_name)
+                    enriched_entity['name_comparison'] = name_comparison
+                    
+                    logger.info(f"Name comparison for '{extracted_name}' vs '{wikidata_name}': {name_comparison['status']}")
+                else:
+                    # No Wikidata info found
+                    enriched_entity['wikidata_label'] = ''
+                    enriched_entity['wikidata_description'] = ''
+                    enriched_entity['name_comparison'] = {
+                        'status': 'no_wikidata',
+                        'similarity': 0.0,
+                        'message': 'No Wikidata information found'
+                    }
+            else:
+                # No Wikidata ID
+                enriched_entity['wikidata_label'] = ''
+                enriched_entity['wikidata_description'] = ''
+                enriched_entity['name_comparison'] = {
+                    'status': 'no_wikidata_id',
+                    'similarity': 0.0,
+                    'message': 'No Wikidata ID available'
+                }
+            
+            enriched_entities.append(enriched_entity)
+        
+        return jsonify({
+            'success': True,
+            'enriched_entities': enriched_entities,
+            'total_entities': len(entities)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error enriching entities: {e}")
+        return jsonify({'error': f'Failed to enrich entities: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Create templates and static directories if they don't exist

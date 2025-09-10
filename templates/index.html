@@ -745,12 +745,46 @@
             }
         }
 
-        function displayResults(result, originalText) {
+        async function displayResults(result, originalText) {
             displayMarkdownOutput(result.annotated_text);
-            displayVisualization(result);
-            displayValidationTable(result);
-            displayMapVisualization(result);
+            
+            // Enrich entities with Wikidata information and name comparison
+            const enrichedEntities = await enrichEntitiesWithWikidata(result.entities);
+            const enrichedResult = { ...result, entities: enrichedEntities };
+            
+            displayVisualization(enrichedResult);
+            displayValidationTable(enrichedResult);
+            displayMapVisualizationWithEnrichedData(enrichedResult);
             displayTextDiff(originalText, result.annotated_text);
+        }
+
+        async function enrichEntitiesWithWikidata(entities) {
+            if (!entities || entities.length === 0) {
+                return entities;
+            }
+            
+            try {
+                const response = await fetch('/api/entities/enrich', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ entities: entities })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    console.log('Successfully enriched entities with Wikidata information');
+                    return data.enriched_entities;
+                } else {
+                    console.error('Error enriching entities:', data.error);
+                    return entities; // Return original entities if enrichment fails
+                }
+            } catch (error) {
+                console.error('Error calling entity enrichment API:', error);
+                return entities; // Return original entities if API call fails
+            }
         }
 
         function displayMarkdownOutput(annotatedText) {
@@ -788,13 +822,50 @@
                 const wikidataLink = entity.wikidata_id ? 
                     `<a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank" class="wikidata-link">🔗</a>` : '';
                 
+                // Add name comparison indicator
+                let nameMatchIndicator = '';
+                if (entity.name_comparison) {
+                    const comparison = entity.name_comparison;
+                    let matchSymbol = '';
+                    let matchColor = '#666';
+                    
+                    switch (comparison.status) {
+                        case 'exact_match':
+                            matchSymbol = '✓';
+                            matchColor = '#00AA00';
+                            break;
+                        case 'very_similar':
+                            matchSymbol = '≈';
+                            matchColor = '#4CAF50';
+                            break;
+                        case 'similar':
+                        case 'somewhat_similar':
+                            matchSymbol = '~';
+                            matchColor = '#FF9800';
+                            break;
+                        case 'different':
+                            matchSymbol = '✗';
+                            matchColor = '#FF6B6B';
+                            break;
+                        default:
+                            matchSymbol = '—';
+                            matchColor = '#666';
+                    }
+                    
+                    const wikidataName = entity.wikidata_label || 'No Wikidata info';
+                    nameMatchIndicator = `<span style="color: ${matchColor}; margin-left: 3px;" title="Wikidata name: ${wikidataName}\nMatch status: ${comparison.message}">${matchSymbol}</span>`;
+                }
+                
+                const tooltipText = `Click to edit - Type: ${entity.label}, Confidence: ${entity.confidence.toFixed(2)}${entity.wikidata_label ? ', Wikidata: ' + entity.wikidata_label : ''}`;
+                
                 const pattern = `[${entity.text}](${entity.label})`;
                 const replacement = `<span class="entity" style="background-color: ${color};" 
                                            onclick="openEntityModal(${index})"
-                                           title="Click to edit - Type: ${entity.label}, Confidence: ${entity.confidence.toFixed(2)}">
+                                           title="${tooltipText}">
                                         ${entity.text}
                                         <span class="entity-label">(${entity.label})</span>
                                         <span class="confidence-indicator" style="color: ${confidenceColor};">●</span>
+                                        ${nameMatchIndicator}
                                         ${wikidataLink}
                                      </span>`;
                 
@@ -847,16 +918,29 @@
                     .edit-btn {
                         background: #ff9800;
                     }
+                    .name-match-exact { color: #00AA00; font-weight: bold; }
+                    .name-match-similar { color: #4CAF50; }
+                    .name-match-partial { color: #FF9800; }
+                    .name-match-different { color: #FF6B6B; }
+                    .name-match-unknown { color: #666; }
+                    .name-comparison {
+                        font-size: 0.9em;
+                        margin-top: 4px;
+                    }
+                    .wikidata-name {
+                        font-style: italic;
+                        color: #0645ad;
+                    }
                 </style>
                 <table class="entity-table">
                     <thead>
                         <tr>
-                            <th>Entity</th>
+                            <th>Extracted Name</th>
+                            <th>Wikidata Name</th>
+                            <th>Match Status</th>
                             <th>Type</th>
-                            <th>Position</th>
                             <th>Confidence</th>
                             <th>Wikidata ID</th>
-                            <th>Description</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -871,17 +955,46 @@
                     `<a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank">${entity.wikidata_id}</a>` :
                     '<em>Not found</em>';
                 
-                const description = entity.description && entity.description.length > 60 ?
-                    entity.description.substring(0, 57) + '...' : entity.description || '';
+                // Handle Wikidata name and comparison
+                const wikidataName = entity.wikidata_label || '<em>No Wikidata info</em>';
+                let matchStatusHtml = '<em>Unknown</em>';
+                let matchStatusClass = 'name-match-unknown';
+                
+                if (entity.name_comparison) {
+                    const comparison = entity.name_comparison;
+                    const similarity = (comparison.similarity * 100).toFixed(1);
+                    
+                    switch (comparison.status) {
+                        case 'exact_match':
+                            matchStatusHtml = `<span class="name-match-exact">✓ Exact Match</span>`;
+                            break;
+                        case 'very_similar':
+                            matchStatusHtml = `<span class="name-match-similar">≈ Very Similar (${similarity}%)</span>`;
+                            break;
+                        case 'similar':
+                            matchStatusHtml = `<span class="name-match-partial">~ Similar (${similarity}%)</span>`;
+                            break;
+                        case 'somewhat_similar':
+                            matchStatusHtml = `<span class="name-match-partial">≈ Partial (${similarity}%)</span>`;
+                            break;
+                        case 'different':
+                            matchStatusHtml = `<span class="name-match-different">✗ Different (${similarity}%)</span>`;
+                            break;
+                        case 'no_wikidata':
+                        case 'no_wikidata_id':
+                            matchStatusHtml = `<span class="name-match-unknown">— ${comparison.message}</span>`;
+                            break;
+                    }
+                }
                 
                 tableHtml += `
                     <tr>
                         <td><strong>${entity.text}</strong></td>
+                        <td><span class="wikidata-name">${wikidataName}</span></td>
+                        <td>${matchStatusHtml}</td>
                         <td>${entity.label}</td>
-                        <td>${entity.start_pos || 0}-${entity.end_pos || 0}</td>
                         <td class="${confidenceClass}">${entity.confidence.toFixed(2)}</td>
                         <td>${wikidataCell}</td>
-                        <td>${description}</td>
                         <td>
                             <button class="action-btn" onclick="validateEntity(${index})">✓</button>
                             <button class="action-btn edit-btn" onclick="openEntityModal(${index})">✏️</button>
@@ -893,12 +1006,20 @@
             tableHtml += `
                     </tbody>
                 </table>
-                <p style="font-size: 0.9em; color: #666;">
-                    <strong>Legend:</strong> 
-                    <span class="confidence-high">●</span> High confidence (>0.8) |
-                    <span class="confidence-medium">●</span> Medium confidence (0.6-0.8) |
-                    <span class="confidence-low">●</span> Low confidence (<0.6)
-                </p>
+                <div style="font-size: 0.9em; color: #666;">
+                    <p><strong>Confidence Legend:</strong> 
+                        <span class="confidence-high">●</span> High (>0.8) |
+                        <span class="confidence-medium">●</span> Medium (0.6-0.8) |
+                        <span class="confidence-low">●</span> Low (<0.6)
+                    </p>
+                    <p><strong>Name Match Legend:</strong> 
+                        <span class="name-match-exact">✓</span> Exact Match |
+                        <span class="name-match-similar">≈</span> Very Similar |
+                        <span class="name-match-partial">~</span> Partial Match |
+                        <span class="name-match-different">✗</span> Different |
+                        <span class="name-match-unknown">—</span> No Wikidata Info
+                    </p>
+                </div>
             `;
             
             container.innerHTML = tableHtml;
@@ -907,14 +1028,14 @@
         let map = null;
         let mapMarkers = [];
         
-        async function displayMapVisualization(result) {
+        function displayMapVisualizationWithEnrichedData(result) {
             const mapContainer = document.getElementById('map-container');
             const mapElement = document.getElementById('map');
             const mapLoading = document.getElementById('map-loading');
             const mapStats = document.getElementById('map-stats');
             
             // Show loading
-            mapLoading.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching geographic coordinates...';
+            mapLoading.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing geographic data...';
             mapLoading.style.display = 'flex';
             mapElement.style.display = 'none';
             
@@ -924,43 +1045,29 @@
                 return;
             }
             
-            try {
-                // Get coordinates for entities
-                const response = await fetch('/api/entities/coordinates', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ entities: result.entities })
-                });
+            // Filter entities that have coordinates (from enrichment)
+            const geolocatedEntities = result.entities.filter(entity => 
+                entity.latitude && entity.longitude
+            );
+            
+            if (geolocatedEntities.length > 0) {
+                // Show map element first
+                mapLoading.style.display = 'none';
+                mapElement.style.display = 'block';
                 
-                const data = await response.json();
-                console.log('Coordinates response:', data);
+                // Initialize or update the map after a short delay
+                setTimeout(() => {
+                    initializeMap(geolocatedEntities);
+                }, 100);
                 
-                if (data.success && data.geolocated_entities.length > 0) {
-                    // Show map element first
-                    mapLoading.style.display = 'none';
-                    mapElement.style.display = 'block';
-                    
-                    // Initialize or update the map after a short delay
-                    setTimeout(() => {
-                        initializeMap(data.geolocated_entities);
-                    }, 100);
-                    
-                    // Update stats
-                    mapStats.innerHTML = `
-                        <strong>Geographic Entities:</strong> ${data.geolocated_count} of ${data.total_entities} entities have geographic coordinates<br>
-                        <small>Click on map markers to see entity details</small>
-                    `;
-                } else {
-                    mapLoading.innerHTML = '<em>No entities with geographic coordinates found</em>';
-                    mapStats.textContent = `Checked ${data.total_entities} entities - no geographic coordinates available`;
-                }
-                
-            } catch (error) {
-                console.error('Error fetching coordinates:', error);
-                mapLoading.innerHTML = '<em style="color: red;">Error loading map data</em>';
-                mapStats.textContent = 'Failed to fetch geographic coordinates';
+                // Update stats
+                mapStats.innerHTML = `
+                    <strong>Geographic Entities:</strong> ${geolocatedEntities.length} of ${result.entities.length} entities have geographic coordinates<br>
+                    <small>Click on map markers to see entity details and name comparison</small>
+                `;
+            } else {
+                mapLoading.innerHTML = '<em>No entities with geographic coordinates found</em>';
+                mapStats.textContent = `Checked ${result.entities.length} entities - no geographic coordinates available`;
             }
         }
         
@@ -1003,13 +1110,52 @@
                 // Create marker with popup
                 const marker = L.marker([lat, lng]).addTo(map);
                 
+                // Generate name comparison info for popup
+                let nameComparisonHtml = '';
+                if (entity.name_comparison && entity.wikidata_label) {
+                    const comparison = entity.name_comparison;
+                    let matchIcon = '';
+                    let matchColor = '#666';
+                    
+                    switch (comparison.status) {
+                        case 'exact_match':
+                            matchIcon = '✓';
+                            matchColor = '#00AA00';
+                            break;
+                        case 'very_similar':
+                            matchIcon = '≈';
+                            matchColor = '#4CAF50';
+                            break;
+                        case 'similar':
+                        case 'somewhat_similar':
+                            matchIcon = '~';
+                            matchColor = '#FF9800';
+                            break;
+                        case 'different':
+                            matchIcon = '✗';
+                            matchColor = '#FF6B6B';
+                            break;
+                        default:
+                            matchIcon = '—';
+                            matchColor = '#666';
+                    }
+                    
+                    nameComparisonHtml = `
+                        <p style="margin: 0 0 4px 0;"><strong>Wikidata Name:</strong> ${entity.wikidata_label}</p>
+                        <p style="margin: 0 0 4px 0;"><strong>Name Match:</strong> 
+                            <span style="color: ${matchColor};">${matchIcon} ${comparison.message}</span>
+                        </p>
+                    `;
+                }
+                
                 const popupContent = `
                     <div style="min-width: 200px;">
                         <h4 style="margin: 0 0 8px 0; color: ${iconColor};">${entity.text}</h4>
                         <p style="margin: 0 0 4px 0;"><strong>Type:</strong> ${entity.label}</p>
                         <p style="margin: 0 0 4px 0;"><strong>Confidence:</strong> ${entity.confidence.toFixed(2)}</p>
-                        ${entity.wikidata_id ? `<p style="margin: 0 0 4px 0;"><strong>Wikidata:</strong> <a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank">${entity.wikidata_id}</a></p>` : ''}
-                        ${entity.description ? `<p style="margin: 0 0 4px 0;"><strong>Description:</strong> ${entity.description}</p>` : ''}
+                        ${nameComparisonHtml}
+                        ${entity.wikidata_id ? `<p style="margin: 0 0 4px 0;"><strong>Wikidata ID:</strong> <a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank">${entity.wikidata_id}</a></p>` : ''}
+                        ${entity.wikidata_description ? `<p style="margin: 0 0 4px 0;"><strong>Description:</strong> ${entity.wikidata_description}</p>` : ''}
                         <p style="margin: 4px 0 0 0; font-size: 0.9em; color: #666;">
                             <strong>Coordinates:</strong> ${lat.toFixed(4)}, ${lng.toFixed(4)}
                         </p>
