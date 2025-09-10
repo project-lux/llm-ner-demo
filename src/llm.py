@@ -219,6 +219,118 @@ class LLMProcessor:
         except ValueError:
             return False
     
+    def _extract_grounding_chunks(self, chunks) -> List[Dict[str, Any]]:
+        """Extract grounding chunks from grounding metadata"""
+        extracted_chunks = []
+        
+        for chunk in chunks:
+            try:
+                chunk_info = {}
+                
+                # Handle different chunk formats
+                if hasattr(chunk, 'web'):
+                    # Web-based chunk
+                    web = chunk.web
+                    chunk_info.update({
+                        'type': 'web',
+                        'uri': getattr(web, 'uri', ''),
+                        'title': getattr(web, 'title', ''),
+                        'snippet': getattr(web, 'snippet', ''),
+                    })
+                elif hasattr(chunk, 'retrievalMetadata'):
+                    # Vertex AI Search chunk
+                    metadata = chunk.retrievalMetadata
+                    chunk_info.update({
+                        'type': 'vertex_search',
+                        'uri': getattr(metadata, 'source', ''),
+                        'title': getattr(metadata, 'title', ''),
+                        'snippet': getattr(chunk, 'content', ''),
+                    })
+                elif hasattr(chunk, 'content'):
+                    # Generic content chunk
+                    chunk_info.update({
+                        'type': 'content',
+                        'uri': getattr(chunk, 'uri', ''),
+                        'title': getattr(chunk, 'title', ''),
+                        'snippet': getattr(chunk, 'content', ''),
+                    })
+                else:
+                    # Fallback: try to extract common attributes
+                    chunk_info.update({
+                        'type': 'unknown',
+                        'uri': str(getattr(chunk, 'uri', getattr(chunk, 'url', getattr(chunk, 'source', '')))),
+                        'title': str(getattr(chunk, 'title', getattr(chunk, 'heading', ''))),
+                        'snippet': str(getattr(chunk, 'content', getattr(chunk, 'text', getattr(chunk, 'snippet', '')))),
+                    })
+                
+                if chunk_info.get('uri') or chunk_info.get('title') or chunk_info.get('snippet'):
+                    extracted_chunks.append(chunk_info)
+                    
+            except Exception as e:
+                logger.warning(f"Error extracting grounding chunk: {e}")
+                continue
+        
+        return extracted_chunks
+    
+    def _extract_grounding_supports(self, supports) -> List[Dict[str, Any]]:
+        """Extract grounding supports (citations) from grounding metadata"""
+        extracted_supports = []
+        
+        for support in supports:
+            try:
+                support_info = {}
+                
+                # Extract segment information
+                if hasattr(support, 'segment'):
+                    segment = support.segment
+                    support_info.update({
+                        'start_index': getattr(segment, 'start_index', 0),
+                        'end_index': getattr(segment, 'end_index', 0),
+                        'text': getattr(segment, 'text', ''),
+                    })
+                
+                # Extract grounding chunk indices
+                if hasattr(support, 'grounding_chunk_indices'):
+                    support_info['grounding_chunk_indices'] = list(support.grounding_chunk_indices)
+                elif hasattr(support, 'grounding_chunk_index'):
+                    support_info['grounding_chunk_indices'] = [support.grounding_chunk_index]
+                
+                # Extract confidence score if available
+                if hasattr(support, 'confidence_scores'):
+                    support_info['confidence_scores'] = list(support.confidence_scores)
+                elif hasattr(support, 'confidence'):
+                    support_info['confidence_scores'] = [support.confidence]
+                
+                extracted_supports.append(support_info)
+                
+            except Exception as e:
+                logger.warning(f"Error extracting grounding support: {e}")
+                continue
+        
+        return extracted_supports
+    
+    def _extract_grounding_sources(self, sources) -> List[Dict[str, Any]]:
+        """Extract legacy grounding sources"""
+        extracted_sources = []
+        
+        for source in sources:
+            try:
+                source_info = {
+                    'uri': str(getattr(source, 'uri', getattr(source, 'url', ''))),
+                    'title': str(getattr(source, 'title', '')),
+                    'snippet': str(getattr(source, 'snippet', getattr(source, 'content', ''))),
+                    'type': 'legacy'
+                }
+                
+                if source_info.get('uri') or source_info.get('title'):
+                    extracted_sources.append(source_info)
+                    
+            except Exception as e:
+                logger.warning(f"Error extracting legacy grounding source: {e}")
+                continue
+        
+        return extracted_sources
+    
     def perform_ner(self, text: str, labels: List[str], use_grounding: bool = True) -> Dict[str, Any]:
         """
         Perform Named Entity Recognition on the given text using the specified labels.
@@ -259,11 +371,51 @@ class LLMProcessor:
                 # Check for grounding metadata
                 grounding_info = {}
                 if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                    grounding_metadata = candidate.grounding_metadata
+                    
+                    # Log all available attributes for debugging
+                    logger.info(f"Grounding metadata attributes: {dir(grounding_metadata)}")
+                    
+                    # Extract comprehensive grounding information
                     grounding_info = {
-                        "search_queries": getattr(candidate.grounding_metadata, 'web_search_queries', []),
-                        "grounding_sources": getattr(candidate.grounding_metadata, 'sources', [])
+                        "search_queries": getattr(grounding_metadata, 'web_search_queries', []),
+                        "grounding_sources": [],
+                        "grounding_chunks": [],
+                        "grounding_supports": []
                     }
-                    logger.info(f"Grounding metadata found: {grounding_info}")
+                    
+                    # Extract grounding sources/chunks (different API versions use different names)
+                    for attr_name in ['sources', 'grounding_chunks', 'grounding_sources', 'chunks']:
+                        if hasattr(grounding_metadata, attr_name):
+                            chunks = getattr(grounding_metadata, attr_name, [])
+                            if chunks:
+                                grounding_info["grounding_chunks"] = self._extract_grounding_chunks(chunks)
+                                logger.info(f"Found grounding chunks in attribute '{attr_name}': {len(chunks)} items")
+                    
+                    # Extract grounding supports (citation information)
+                    for attr_name in ['grounding_supports', 'supports', 'grounding_support']:
+                        if hasattr(grounding_metadata, attr_name):
+                            supports = getattr(grounding_metadata, attr_name, [])
+                            if supports:
+                                grounding_info["grounding_supports"] = self._extract_grounding_supports(supports)
+                                logger.info(f"Found grounding supports in attribute '{attr_name}': {len(supports)} items")
+                    
+                    # Legacy sources attribute
+                    if hasattr(grounding_metadata, 'sources'):
+                        sources = getattr(grounding_metadata, 'sources', [])
+                        if sources:
+                            grounding_info["grounding_sources"] = self._extract_grounding_sources(sources)
+                    
+                    logger.info(f"Grounding metadata summary:")
+                    logger.info(f"  - Search queries: {len(grounding_info.get('search_queries', []))}")
+                    logger.info(f"  - Grounding chunks: {len(grounding_info.get('grounding_chunks', []))}")
+                    logger.info(f"  - Grounding supports: {len(grounding_info.get('grounding_supports', []))}")
+                    logger.info(f"  - Legacy sources: {len(grounding_info.get('grounding_sources', []))}")
+                    
+                    # Log detailed chunk information if available
+                    if grounding_info.get('grounding_chunks'):
+                        for i, chunk in enumerate(grounding_info['grounding_chunks'][:3]):  # Log first 3
+                            logger.info(f"  Chunk {i}: {chunk.get('title', 'No title')[:50]}... from {chunk.get('uri', 'No URI')}")
                 
                 if candidate.content and candidate.content.parts:
                     result = candidate.content.parts[0].text.strip()

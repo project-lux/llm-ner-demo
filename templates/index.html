@@ -545,6 +545,10 @@
                         <i class="fas fa-check-circle"></i>
                         Entity Validation
                     </button>
+                    <button class="tab" onclick="switchTab('sources')">
+                        <i class="fas fa-link"></i>
+                        Grounding Sources
+                    </button>
                     <button class="tab" onclick="switchTab('map')">
                         <i class="fas fa-map-marked-alt"></i>
                         Map View
@@ -570,6 +574,12 @@
                 <div id="validation-tab" class="tab-content">
                     <div id="validation-output">
                         <em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>
+                    </div>
+                </div>
+
+                <div id="sources-tab" class="tab-content">
+                    <div id="sources-output">
+                        <em style="color: #666;">Grounding sources and citations used to inform entity recognition will appear here</em>
                     </div>
                 </div>
                 
@@ -754,6 +764,7 @@
             
             displayVisualization(enrichedResult);
             displayValidationTable(enrichedResult);
+            displayGroundingSources(result);
             displayMapVisualizationWithEnrichedData(enrichedResult);
             displayTextDiff(originalText, result.annotated_text);
         }
@@ -873,6 +884,232 @@
             });
             
             container.innerHTML = visualText;
+        }
+
+        async function displayGroundingSources(result) {
+            const container = document.getElementById('sources-output');
+            
+            // Check for grounding metadata
+            let groundingMetadata = result.grounding_metadata;
+            if (!groundingMetadata) {
+                container.innerHTML = '<em style="color: #666;">No grounding metadata available</em>';
+                return;
+            }
+            
+            // Try to resolve grounding redirect URLs to actual source URLs
+            try {
+                if (groundingMetadata.grounding_chunks && groundingMetadata.grounding_chunks.length > 0) {
+                    const response = await fetch('/api/grounding/resolve-urls', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ grounding_metadata: groundingMetadata })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.success) {
+                        groundingMetadata = data.grounding_metadata;
+                        console.log('Successfully resolved grounding URLs');
+                    }
+                }
+            } catch (error) {
+                console.error('Error resolving grounding URLs:', error);
+                // Continue with original metadata if resolution fails
+            }
+            
+            let sourcesHtml = `
+                <style>
+                    .sources-container {
+                        font-family: Arial, sans-serif;
+                    }
+                    .sources-section {
+                        margin-bottom: 20px;
+                        border: 1px solid #e1e5e9;
+                        border-radius: 8px;
+                        padding: 15px;
+                    }
+                    .sources-section h3 {
+                        margin: 0 0 10px 0;
+                        color: #333;
+                        font-size: 1.1em;
+                    }
+                    .source-item {
+                        background: #f8f9fa;
+                        border: 1px solid #dee2e6;
+                        border-radius: 5px;
+                        padding: 12px;
+                        margin-bottom: 10px;
+                    }
+                    .source-title {
+                        font-weight: bold;
+                        color: #0645ad;
+                        margin-bottom: 5px;
+                    }
+                    .source-title a {
+                        color: #0645ad;
+                        text-decoration: none;
+                    }
+                    .source-title a:hover {
+                        text-decoration: underline;
+                    }
+                    .source-url {
+                        font-size: 0.9em;
+                        color: #28a745;
+                        margin-bottom: 5px;
+                        word-break: break-all;
+                    }
+                    .source-snippet {
+                        color: #666;
+                        font-size: 0.9em;
+                        line-height: 1.4;
+                        background: white;
+                        padding: 8px;
+                        border-radius: 3px;
+                        border-left: 3px solid #007bff;
+                        margin-top: 8px;
+                    }
+                    .query-list {
+                        list-style: none;
+                        padding: 0;
+                    }
+                    .query-item {
+                        background: #e3f2fd;
+                        padding: 6px 10px;
+                        margin: 3px 0;
+                        border-radius: 15px;
+                        display: inline-block;
+                        margin-right: 8px;
+                        font-size: 0.9em;
+                    }
+                    .support-item {
+                        background: #fff3cd;
+                        border: 1px solid #ffeaa7;
+                        border-radius: 5px;
+                        padding: 10px;
+                        margin-bottom: 8px;
+                    }
+                    .support-text {
+                        font-style: italic;
+                        color: #333;
+                        margin-bottom: 5px;
+                    }
+                    .support-indices {
+                        font-size: 0.8em;
+                        color: #666;
+                    }
+                </style>
+                <div class="sources-container">
+            `;
+            
+            // Display search queries
+            if (groundingMetadata.search_queries && groundingMetadata.search_queries.length > 0) {
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <h3><i class="fas fa-search"></i> Search Queries Used</h3>
+                        <div class="query-list">
+                `;
+                groundingMetadata.search_queries.forEach(query => {
+                    sourcesHtml += `<span class="query-item">${query}</span>`;
+                });
+                sourcesHtml += `
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Display grounding chunks/sources
+            let hasSourceContent = false;
+            if (groundingMetadata.grounding_chunks && groundingMetadata.grounding_chunks.length > 0) {
+                hasSourceContent = true;
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <h3><i class="fas fa-link"></i> Sources Used (${groundingMetadata.grounding_chunks.length} sources)</h3>
+                `;
+                groundingMetadata.grounding_chunks.forEach((chunk, index) => {
+                    const displayUri = chunk.resolved_uri || chunk.uri;
+                    const hasRedirect = chunk.resolved_uri && chunk.original_uri && chunk.resolved_uri !== chunk.original_uri;
+                    
+                    sourcesHtml += `
+                        <div class="source-item">
+                            <div class="source-title">
+                                ${displayUri ? `<a href="${displayUri}" target="_blank">${chunk.title || 'Source ' + (index + 1)}</a>` : (chunk.title || 'Source ' + (index + 1))}
+                            </div>
+                            ${displayUri ? `<div class="source-url">${displayUri}</div>` : ''}
+                            ${hasRedirect ? `<div class="source-url" style="color: #666; font-size: 0.8em; margin-top: 5px;">
+                                <strong>Redirect from:</strong> ${chunk.original_uri.length > 80 ? chunk.original_uri.substring(0, 77) + '...' : chunk.original_uri}
+                            </div>` : ''}
+                            ${chunk.snippet ? `<div class="source-snippet">${chunk.snippet}</div>` : ''}
+                        </div>
+                    `;
+                });
+                sourcesHtml += `</div>`;
+            }
+            
+            // Display legacy sources if available
+            if (groundingMetadata.grounding_sources && groundingMetadata.grounding_sources.length > 0) {
+                hasSourceContent = true;
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <h3><i class="fas fa-archive"></i> Legacy Sources (${groundingMetadata.grounding_sources.length} sources)</h3>
+                `;
+                groundingMetadata.grounding_sources.forEach((source, index) => {
+                    sourcesHtml += `
+                        <div class="source-item">
+                            <div class="source-title">
+                                ${source.uri ? `<a href="${source.uri}" target="_blank">${source.title || 'Source ' + (index + 1)}</a>` : (source.title || 'Source ' + (index + 1))}
+                            </div>
+                            ${source.uri ? `<div class="source-url">${source.uri}</div>` : ''}
+                            ${source.snippet ? `<div class="source-snippet">${source.snippet}</div>` : ''}
+                        </div>
+                    `;
+                });
+                sourcesHtml += `</div>`;
+            }
+            
+            // Display grounding supports (citations)
+            if (groundingMetadata.grounding_supports && groundingMetadata.grounding_supports.length > 0) {
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <h3><i class="fas fa-quote-right"></i> Citations (${groundingMetadata.grounding_supports.length} citations)</h3>
+                `;
+                groundingMetadata.grounding_supports.forEach((support, index) => {
+                    sourcesHtml += `
+                        <div class="support-item">
+                            ${support.text ? `<div class="support-text">"${support.text}"</div>` : ''}
+                            <div class="support-indices">
+                                Citation ${index + 1}
+                                ${support.grounding_chunk_indices ? ` → References sources: ${support.grounding_chunk_indices.join(', ')}` : ''}
+                                ${support.confidence_scores ? ` (Confidence: ${support.confidence_scores.map(c => c.toFixed(2)).join(', ')})` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                sourcesHtml += `</div>`;
+            }
+            
+            // Show summary or no sources message
+            if (!hasSourceContent && (!groundingMetadata.search_queries || groundingMetadata.search_queries.length === 0)) {
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <em style="color: #666;">No grounding sources found. This may be because:</em>
+                        <ul style="margin-top: 10px; color: #666;">
+                            <li>The model used internal knowledge instead of web search</li>
+                            <li>Grounding sources aren't returned with JSON-formatted responses</li>
+                            <li>The search didn't find relevant external sources</li>
+                        </ul>
+                    </div>
+                `;
+            } else if (groundingMetadata.search_queries && groundingMetadata.search_queries.length > 0 && !hasSourceContent) {
+                sourcesHtml += `
+                    <div class="sources-section">
+                        <em style="color: #666;">Search queries were executed but source details are not available. This is common with JSON-formatted responses where grounding informs the model but source URLs aren't returned in the metadata.</em>
+                    </div>
+                `;
+            }
+            
+            sourcesHtml += `</div>`;
+            container.innerHTML = sourcesHtml;
         }
 
         function displayValidationTable(result) {
@@ -1343,6 +1580,7 @@
             document.getElementById('markdown-output').innerHTML = '<em style="color: #666;">Processed text with entity annotations will appear here</em>';
             document.getElementById('visualization-output').innerHTML = '<em style="color: #666;">Processed text will appear here with color-coded entities and Wikidata links</em>';
             document.getElementById('validation-output').innerHTML = '<em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>';
+            document.getElementById('sources-output').innerHTML = '<em style="color: #666;">Grounding sources and citations used to inform entity recognition will appear here</em>';
             document.getElementById('diff-output').innerHTML = '<em style="color: #666;">Text differences will appear here</em>';
             
             // Clear map

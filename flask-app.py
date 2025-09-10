@@ -7,6 +7,7 @@ from typing import List, Tuple, Dict, Any
 from src.llm import LLMProcessor
 import logging
 import os
+from urllib.parse import urlparse, parse_qs
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,30 @@ def extract_entities(annotated_text: str) -> List[Tuple[str, str]]:
     """Extract entities and their labels from annotated text."""
     pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     return re.findall(pattern, annotated_text)
+
+def resolve_grounding_redirect_url(redirect_url: str) -> str:
+    """Try to resolve a Google grounding redirect URL to the actual source URL."""
+    try:
+        # Check if it's a grounding redirect URL
+        if 'vertexaisearch.cloud.google.com/grounding-api-redirect' in redirect_url:
+            # Make a HEAD request to get the redirect location without downloading content
+            response = requests.head(redirect_url, allow_redirects=True, timeout=5)
+            if response.url != redirect_url:
+                logger.info(f"Resolved grounding redirect: {redirect_url[:100]}... -> {response.url}")
+                return response.url
+            else:
+                # If HEAD doesn't work, try a quick GET with small timeout
+                response = requests.get(redirect_url, allow_redirects=True, timeout=3, stream=True)
+                if response.url != redirect_url:
+                    logger.info(f"Resolved grounding redirect via GET: {redirect_url[:100]}... -> {response.url}")
+                    return response.url
+        
+        # Return original URL if no redirect or if it's not a grounding URL
+        return redirect_url
+        
+    except Exception as e:
+        logger.warning(f"Failed to resolve grounding redirect URL: {e}")
+        return redirect_url
 
 def compare_entity_names(extracted_name: str, wikidata_name: str) -> Dict[str, Any]:
     """Compare extracted entity name with Wikidata name and return match status."""
@@ -396,6 +421,46 @@ def enrich_entities():
     except Exception as e:
         logger.error(f"Error enriching entities: {e}")
         return jsonify({'error': f'Failed to enrich entities: {str(e)}'}), 500
+
+@app.route('/api/grounding/resolve-urls', methods=['POST'])
+def resolve_grounding_urls():
+    """Resolve grounding redirect URLs to actual source URLs."""
+    try:
+        data = request.get_json()
+        grounding_metadata = data.get('grounding_metadata', {})
+        
+        # Resolve URLs in grounding chunks
+        if 'grounding_chunks' in grounding_metadata:
+            for chunk in grounding_metadata['grounding_chunks']:
+                if 'uri' in chunk and chunk['uri']:
+                    original_uri = chunk['uri']
+                    resolved_uri = resolve_grounding_redirect_url(original_uri)
+                    if resolved_uri != original_uri:
+                        chunk['resolved_uri'] = resolved_uri
+                        chunk['original_uri'] = original_uri
+                    else:
+                        chunk['resolved_uri'] = original_uri
+        
+        # Resolve URLs in legacy sources
+        if 'grounding_sources' in grounding_metadata:
+            for source in grounding_metadata['grounding_sources']:
+                if 'uri' in source and source['uri']:
+                    original_uri = source['uri']
+                    resolved_uri = resolve_grounding_redirect_url(original_uri)
+                    if resolved_uri != original_uri:
+                        source['resolved_uri'] = resolved_uri
+                        source['original_uri'] = original_uri
+                    else:
+                        source['resolved_uri'] = original_uri
+        
+        return jsonify({
+            'success': True,
+            'grounding_metadata': grounding_metadata
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resolving grounding URLs: {e}")
+        return jsonify({'error': f'Failed to resolve URLs: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Create templates and static directories if they don't exist
