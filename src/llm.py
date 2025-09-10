@@ -17,7 +17,7 @@ class LLMProcessor:
     def __init__(self, 
                  project_id: str = "cultural-heritage-gemini",
                  location: str = "us-central1",
-                 model_name: str = "gemini-2.5-flash"):
+                 model_name: str = "gemini-2.5-pro"):
         self.project_id = project_id
         self.location = location
         self.model_name = model_name
