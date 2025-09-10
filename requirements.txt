@@ -1,6 +1,8 @@
 # Core dependencies
 gradio>=4.0.0
+flask>=2.3.0
 google-genai>=0.3.0
+requests>=2.31.0
 
 # For logging and data processing
 typing-extensions>=4.0.0

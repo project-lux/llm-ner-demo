@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NER Demo with LLM - Flask Version</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+
+        .features {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .feature {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9em;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            padding: 30px;
+        }
+
+        .input-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 10px;
+            height: fit-content;
+        }
+
+        .results-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 10px;
+        }
+
+        .section-title {
+            font-size: 1.4em;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-group textarea,
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group textarea:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #4facfe;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            flex: 1;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(79, 172, 254, 0.3);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e1e5e9;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 12px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 14px;
+            font-weight: 500;
+            color: #6c757d;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            color: #4facfe;
+            border-bottom-color: #4facfe;
+        }
+
+        .tab-content {
+            display: none;
+            min-height: 400px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .output-box {
+            background: white;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 200px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .entity-visualization {
+            background: white;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 200px;
+            line-height: 1.8;
+        }
+
+        .entity {
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            position: relative;
+            display: inline-block;
+            margin: 2px;
+            transition: all 0.2s ease;
+        }
+
+        .entity:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .entity-label {
+            font-size: 0.7em;
+            vertical-align: super;
+            margin-left: 4px;
+        }
+
+        .confidence-indicator {
+            font-size: 0.8em;
+            margin-left: 4px;
+        }
+
+        .wikidata-link {
+            text-decoration: none;
+            color: #0645ad;
+            margin-left: 4px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #6c757d;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4facfe;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #dc3545;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border-left: 4px solid #28a745;
+        }
+
+        /* Entity popup modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .close {
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            background: none;
+            border: none;
+        }
+
+        .close:hover {
+            opacity: 0.7;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .search-results {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .search-result-item {
+            padding: 12px;
+            border-bottom: 1px solid #e1e5e9;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .search-result-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .search-result-title {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .search-result-description {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 4px;
+        }
+
+        .search-result-id {
+            color: #0645ad;
+            font-size: 0.8em;
+            margin-top: 4px;
+        }
+
+        .examples {
+            background: #e3f2fd;
+            padding: 20px;
+            margin: 20px 30px;
+            border-radius: 10px;
+            border-left: 4px solid #2196f3;
+        }
+
+        .examples h3 {
+            color: #1976d2;
+            margin-bottom: 15px;
+        }
+
+        .examples ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .examples li {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: white;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .examples li:hover {
+            background: #f5f5f5;
+        }
+
+        .examples strong {
+            color: #1976d2;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .features {
+                gap: 15px;
+            }
+            
+            .feature {
+                font-size: 0.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-brain"></i> NER Demo with LLM</h1>
+            <p>Named Entity Recognition with Wikidata Grounding - Interactive Flask Version</p>
+            <div class="features">
+                <div class="feature">
+                    <i class="fas fa-bullseye"></i>
+                    Custom Labels
+                </div>
+                <div class="feature">
+                    <i class="fas fa-globe"></i>
+                    Wikidata Grounding
+                </div>
+                <div class="feature">
+                    <i class="fas fa-chart-bar"></i>
+                    Confidence Scoring
+                </div>
+                <div class="feature">
+                    <i class="fas fa-edit"></i>
+                    Interactive Editing
+                </div>
+                <div class="feature">
+                    <i class="fas fa-link"></i>
+                    External Links
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="input-section">
+                <h2 class="section-title">
+                    <i class="fas fa-keyboard"></i>
+                    Input
+                </h2>
+
+                <div class="form-group">
+                    <label for="text-input">Text to Process</label>
+                    <textarea 
+                        id="text-input" 
+                        placeholder="Enter the text you want to analyze for named entities..."
+                    >Tom went to Rome yesterday. He works for Microsoft and earned $50,000 last year.</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="labels-input">Entity Labels (comma-separated)</label>
+                    <input 
+                        type="text" 
+                        id="labels-input" 
+                        placeholder="e.g., PERSON, LOCATION, ORGANIZATION"
+                        value="PERSON, LOCATION, ORGANIZATION, MONEY"
+                    >
+                    <small style="color: #666; font-size: 0.9em;">Enter the entity types you want to detect, separated by commas</small>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="processText()">
+                        <i class="fas fa-play"></i>
+                        Process Text
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadExampleLabels()">
+                        <i class="fas fa-lightbulb"></i>
+                        Example Labels
+                    </button>
+                </div>
+            </div>
+
+            <div class="results-section">
+                <h2 class="section-title">
+                    <i class="fas fa-chart-line"></i>
+                    Results
+                </h2>
+
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('markdown')">
+                        <i class="fas fa-code"></i>
+                        Markdown Output
+                    </button>
+                    <button class="tab" onclick="switchTab('visualization')">
+                        <i class="fas fa-paint-brush"></i>
+                        Visualization
+                    </button>
+                    <button class="tab" onclick="switchTab('validation')">
+                        <i class="fas fa-check-circle"></i>
+                        Entity Validation
+                    </button>
+                    <button class="tab" onclick="switchTab('diff')">
+                        <i class="fas fa-code-branch"></i>
+                        Text Diff
+                    </button>
+                </div>
+
+                <div id="markdown-tab" class="tab-content active">
+                    <div class="output-box" id="markdown-output">
+                        <em style="color: #666;">Processed text with entity annotations will appear here</em>
+                    </div>
+                </div>
+
+                <div id="visualization-tab" class="tab-content">
+                    <div class="entity-visualization" id="visualization-output">
+                        <em style="color: #666;">Processed text will appear here with color-coded entities and Wikidata links</em>
+                    </div>
+                </div>
+
+                <div id="validation-tab" class="tab-content">
+                    <div id="validation-output">
+                        <em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>
+                    </div>
+                </div>
+
+                <div id="diff-tab" class="tab-content">
+                    <div class="output-box" id="diff-output">
+                        <em style="color: #666;">Text differences will appear here</em>
+                    </div>
+                </div>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Processing your text...</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="examples">
+            <h3><i class="fas fa-lightbulb"></i> Example Texts to Try:</h3>
+            <ul>
+                <li onclick="loadExample('news')">
+                    <strong>News:</strong> "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners."
+                </li>
+                <li onclick="loadExample('biography')">
+                    <strong>Biography:</strong> "Albert Einstein was born in Germany in 1879 and later moved to Princeton University in New Jersey."
+                </li>
+                <li onclick="loadExample('business')">
+                    <strong>Business:</strong> "The merger between Disney and Fox was completed in 2019 for $71.3 billion."
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Entity Edit Modal -->
+    <div id="entity-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-edit"></i> Edit Entity</h3>
+                <button class="close" onclick="closeEntityModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Entity Text:</label>
+                    <input type="text" id="modal-entity-text" readonly>
+                </div>
+                <div class="form-group">
+                    <label>Current Label:</label>
+                    <input type="text" id="modal-entity-label">
+                </div>
+                <div class="form-group">
+                    <label>Current Wikidata ID:</label>
+                    <input type="text" id="modal-wikidata-id" placeholder="e.g., Q123456">
+                </div>
+                <div class="form-group">
+                    <label>Search Wikidata:</label>
+                    <input type="text" id="wikidata-search" class="search-box" placeholder="Search for alternative Wikidata entries...">
+                </div>
+                <div id="search-results" class="search-results"></div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="saveEntityChanges()">
+                        <i class="fas fa-save"></i>
+                        Save Changes
+                    </button>
+                    <button class="btn btn-secondary" onclick="closeEntityModal()">
+                        <i class="fas fa-times"></i>
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentResults = null;
+        let currentEntityIndex = null;
+
+        function switchTab(tabName) {
+            // Remove active class from all tabs and contents
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            
+            // Add active class to selected tab and content
+            event.target.classList.add('active');
+            document.getElementById(tabName + '-tab').classList.add('active');
+        }
+
+        function loadExample(type) {
+            const examples = {
+                'news': "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners.",
+                'biography': "Albert Einstein was born in Germany in 1879 and later moved to Princeton University in New Jersey.",
+                'business': "The merger between Disney and Fox was completed in 2019 for $71.3 billion."
+            };
+            
+            const labels = {
+                'news': "PERSON, LOCATION, ORGANIZATION",
+                'biography': "PERSON, LOCATION, ORGANIZATION, DATE",
+                'business': "ORGANIZATION, DATE, MONEY"
+            };
+            
+            document.getElementById('text-input').value = examples[type];
+            document.getElementById('labels-input').value = labels[type];
+        }
+
+        function loadExampleLabels() {
+            document.getElementById('labels-input').value = "PERSON, LOCATION, ORGANIZATION, DATE, MONEY";
+        }
+
+        async function processText() {
+            const text = document.getElementById('text-input').value.trim();
+            const labels = document.getElementById('labels-input').value.trim();
+            
+            if (!text) {
+                showError('Please enter some text to process.');
+                return;
+            }
+            
+            if (!labels) {
+                showError('Please enter at least one entity label.');
+                return;
+            }
+            
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            clearResults();
+            
+            try {
+                const response = await fetch('/api/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        labels: labels
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentResults = data.result;
+                    displayResults(data.result, data.original_text);
+                    showSuccess('Text processed successfully!');
+                } else {
+                    showError(data.error || 'Failed to process text');
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Network error: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        function displayResults(result, originalText) {
+            displayMarkdownOutput(result.annotated_text);
+            displayVisualization(result);
+            displayValidationTable(result);
+            displayTextDiff(originalText, result.annotated_text);
+        }
+
+        function displayMarkdownOutput(annotatedText) {
+            document.getElementById('markdown-output').textContent = annotatedText;
+        }
+
+        function displayVisualization(result) {
+            const container = document.getElementById('visualization-output');
+            
+            if (!result.entities || result.entities.length === 0) {
+                container.innerHTML = '<em style="color: #666;">No entities found.</em>';
+                return;
+            }
+            
+            let visualText = result.annotated_text;
+            
+            // Create color map for entity types
+            const colors = [
+                "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", 
+                "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9"
+            ];
+            
+            const uniqueLabels = [...new Set(result.entities.map(e => e.label))];
+            const colorMap = {};
+            uniqueLabels.forEach((label, i) => {
+                colorMap[label] = colors[i % colors.length];
+            });
+            
+            // Replace annotations with interactive HTML spans
+            result.entities.forEach((entity, index) => {
+                const color = colorMap[entity.label] || "#CCCCCC";
+                const confidenceColor = entity.confidence > 0.8 ? "#00AA00" : 
+                                       entity.confidence > 0.6 ? "#FFAA00" : "#FF6B6B";
+                
+                const wikidataLink = entity.wikidata_id ? 
+                    `<a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank" class="wikidata-link">🔗</a>` : '';
+                
+                const pattern = `[${entity.text}](${entity.label})`;
+                const replacement = `<span class="entity" style="background-color: ${color};" 
+                                           onclick="openEntityModal(${index})"
+                                           title="Click to edit - Type: ${entity.label}, Confidence: ${entity.confidence.toFixed(2)}">
+                                        ${entity.text}
+                                        <span class="entity-label">(${entity.label})</span>
+                                        <span class="confidence-indicator" style="color: ${confidenceColor};">●</span>
+                                        ${wikidataLink}
+                                     </span>`;
+                
+                visualText = visualText.replace(pattern, replacement);
+            });
+            
+            container.innerHTML = visualText;
+        }
+
+        function displayValidationTable(result) {
+            const container = document.getElementById('validation-output');
+            
+            if (!result.entities || result.entities.length === 0) {
+                container.innerHTML = '<em style="color: #666;">No entities to validate.</em>';
+                return;
+            }
+            
+            let tableHtml = `
+                <style>
+                    .entity-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-family: Arial, sans-serif;
+                        margin: 10px 0;
+                    }
+                    .entity-table th, .entity-table td {
+                        border: 1px solid #ddd;
+                        padding: 8px;
+                        text-align: left;
+                    }
+                    .entity-table th {
+                        background-color: #f2f2f2;
+                        font-weight: bold;
+                    }
+                    .entity-table tr:nth-child(even) {
+                        background-color: #f9f9f9;
+                    }
+                    .confidence-high { color: #00AA00; font-weight: bold; }
+                    .confidence-medium { color: #FFAA00; font-weight: bold; }
+                    .confidence-low { color: #FF6B6B; font-weight: bold; }
+                    .action-btn {
+                        background: #4CAF50;
+                        color: white;
+                        border: none;
+                        padding: 4px 8px;
+                        border-radius: 3px;
+                        cursor: pointer;
+                        margin-right: 5px;
+                    }
+                    .edit-btn {
+                        background: #ff9800;
+                    }
+                </style>
+                <table class="entity-table">
+                    <thead>
+                        <tr>
+                            <th>Entity</th>
+                            <th>Type</th>
+                            <th>Position</th>
+                            <th>Confidence</th>
+                            <th>Wikidata ID</th>
+                            <th>Description</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            result.entities.forEach((entity, index) => {
+                const confidenceClass = entity.confidence > 0.8 ? 'confidence-high' :
+                                       entity.confidence > 0.6 ? 'confidence-medium' : 'confidence-low';
+                
+                const wikidataCell = entity.wikidata_id ? 
+                    `<a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank">${entity.wikidata_id}</a>` :
+                    '<em>Not found</em>';
+                
+                const description = entity.description && entity.description.length > 60 ?
+                    entity.description.substring(0, 57) + '...' : entity.description || '';
+                
+                tableHtml += `
+                    <tr>
+                        <td><strong>${entity.text}</strong></td>
+                        <td>${entity.label}</td>
+                        <td>${entity.start_pos || 0}-${entity.end_pos || 0}</td>
+                        <td class="${confidenceClass}">${entity.confidence.toFixed(2)}</td>
+                        <td>${wikidataCell}</td>
+                        <td>${description}</td>
+                        <td>
+                            <button class="action-btn" onclick="validateEntity(${index})">✓</button>
+                            <button class="action-btn edit-btn" onclick="openEntityModal(${index})">✏️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tableHtml += `
+                    </tbody>
+                </table>
+                <p style="font-size: 0.9em; color: #666;">
+                    <strong>Legend:</strong> 
+                    <span class="confidence-high">●</span> High confidence (>0.8) |
+                    <span class="confidence-medium">●</span> Medium confidence (0.6-0.8) |
+                    <span class="confidence-low">●</span> Low confidence (<0.6)
+                </p>
+            `;
+            
+            container.innerHTML = tableHtml;
+        }
+
+        function displayTextDiff(originalText, annotatedText) {
+            // For simplicity, just show the difference in plain text
+            const processedText = annotatedText.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+            
+            if (originalText === processedText) {
+                document.getElementById('diff-output').textContent = 'No differences found between original and processed text (annotations removed).';
+            } else {
+                document.getElementById('diff-output').textContent = `Original:\n${originalText}\n\nProcessed:\n${processedText}`;
+            }
+        }
+
+        function openEntityModal(entityIndex) {
+            if (!currentResults || !currentResults.entities || !currentResults.entities[entityIndex]) {
+                return;
+            }
+            
+            currentEntityIndex = entityIndex;
+            const entity = currentResults.entities[entityIndex];
+            
+            document.getElementById('modal-entity-text').value = entity.text;
+            document.getElementById('modal-entity-label').value = entity.label;
+            document.getElementById('modal-wikidata-id').value = entity.wikidata_id || '';
+            document.getElementById('wikidata-search').value = '';
+            document.getElementById('search-results').innerHTML = '';
+            
+            document.getElementById('entity-modal').style.display = 'block';
+        }
+
+        function closeEntityModal() {
+            document.getElementById('entity-modal').style.display = 'none';
+            currentEntityIndex = null;
+        }
+
+        async function searchWikidata() {
+            const query = document.getElementById('wikidata-search').value.trim();
+            
+            if (!query) {
+                document.getElementById('search-results').innerHTML = '';
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/wikidata/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+                
+                const data = await response.json();
+                
+                if (data.results) {
+                    displaySearchResults(data.results);
+                } else {
+                    document.getElementById('search-results').innerHTML = '<p>No results found.</p>';
+                }
+                
+            } catch (error) {
+                console.error('Error searching Wikidata:', error);
+                document.getElementById('search-results').innerHTML = '<p>Error searching Wikidata.</p>';
+            }
+        }
+
+        function displaySearchResults(results) {
+            const container = document.getElementById('search-results');
+            
+            if (results.length === 0) {
+                container.innerHTML = '<p>No results found.</p>';
+                return;
+            }
+            
+            let html = '';
+            results.forEach(result => {
+                html += `
+                    <div class="search-result-item" onclick="selectSearchResult('${result.id}', '${result.label}', '${result.description}')">
+                        <div class="search-result-title">${result.label}</div>
+                        <div class="search-result-description">${result.description}</div>
+                        <div class="search-result-id">${result.id}</div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+
+        function selectSearchResult(id, label, description) {
+            document.getElementById('modal-wikidata-id').value = id;
+            // Optionally update the label as well
+            // document.getElementById('modal-entity-label').value = label;
+        }
+
+        async function saveEntityChanges() {
+            if (currentEntityIndex === null || !currentResults) {
+                return;
+            }
+            
+            const newLabel = document.getElementById('modal-entity-label').value.trim();
+            const newWikidataId = document.getElementById('modal-wikidata-id').value.trim();
+            
+            // Update the current results
+            currentResults.entities[currentEntityIndex].label = newLabel;
+            currentResults.entities[currentEntityIndex].wikidata_id = newWikidataId;
+            
+            // Send update to server
+            try {
+                const response = await fetch('/api/entity/update', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        entity_id: currentEntityIndex,
+                        updates: {
+                            label: newLabel,
+                            wikidata_id: newWikidataId
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Refresh the display
+                    displayResults(currentResults, document.getElementById('text-input').value);
+                    closeEntityModal();
+                    showSuccess('Entity updated successfully!');
+                } else {
+                    showError(data.error || 'Failed to update entity');
+                }
+                
+            } catch (error) {
+                console.error('Error updating entity:', error);
+                showError('Network error: ' + error.message);
+            }
+        }
+
+        function validateEntity(entityIndex) {
+            showSuccess(`Entity "${currentResults.entities[entityIndex].text}" validated!`);
+        }
+
+        function clearResults() {
+            document.getElementById('markdown-output').innerHTML = '<em style="color: #666;">Processed text with entity annotations will appear here</em>';
+            document.getElementById('visualization-output').innerHTML = '<em style="color: #666;">Processed text will appear here with color-coded entities and Wikidata links</em>';
+            document.getElementById('validation-output').innerHTML = '<em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>';
+            document.getElementById('diff-output').innerHTML = '<em style="color: #666;">Text differences will appear here</em>';
+        }
+
+        function showError(message) {
+            // Remove existing messages
+            document.querySelectorAll('.error, .success').forEach(el => el.remove());
+            
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
+            
+            document.querySelector('.results-section').insertBefore(errorDiv, document.querySelector('.tabs'));
+            
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+
+        function showSuccess(message) {
+            // Remove existing messages
+            document.querySelectorAll('.error, .success').forEach(el => el.remove());
+            
+            const successDiv = document.createElement('div');
+            successDiv.className = 'success';
+            successDiv.innerHTML = `<i class="fas fa-check-circle"></i> ${message}`;
+            
+            document.querySelector('.results-section').insertBefore(successDiv, document.querySelector('.tabs'));
+            
+            setTimeout(() => successDiv.remove(), 3000);
+        }
+
+        // Add event listeners
+        document.getElementById('wikidata-search').addEventListener('input', function() {
+            const query = this.value.trim();
+            if (query.length > 2) {
+                setTimeout(searchWikidata, 300); // Debounce
+            } else {
+                document.getElementById('search-results').innerHTML = '';
+            }
+        });
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('entity-modal');
+            if (event.target === modal) {
+                closeEntityModal();
+            }
+        }
+
+        // Handle Enter key in text inputs
+        document.getElementById('text-input').addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.key === 'Enter') {
+                processText();
+            }
+        });
+
+        document.getElementById('labels-input').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                processText();
+            }
+        });
+    </script>
+</body>
+</html>
