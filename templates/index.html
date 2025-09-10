@@ -804,13 +804,225 @@
             container.innerHTML = visualText;
         }
 
-        function displayValidationTable(result) {
+        async function displayValidationTable(result) {
             const container = document.getElementById('validation-output');
             
             if (!result.entities || result.entities.length === 0) {
                 container.innerHTML = '<em style="color: #666;">No entities to validate.</em>';
                 return;
             }
+            
+            // Show loading
+            container.innerHTML = '<div style="text-align: center; padding: 20px;"><i class="fas fa-spinner fa-spin"></i> Validating entity names...</div>';
+            
+            try {
+                // Get name validation for entities
+                const response = await fetch('/api/entities/validate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ entities: result.entities })
+                });
+                
+                const data = await response.json();
+                console.log('Validation response:', data);
+                
+                if (data.success) {
+                    displayValidationTableWithNames(data.validated_entities, data.flagged_count);
+                } else {
+                    // Fallback to original table
+                    displayOriginalValidationTable(result.entities);
+                }
+                
+            } catch (error) {
+                console.error('Error validating names:', error);
+                // Fallback to original table
+                displayOriginalValidationTable(result.entities);
+            }
+        }
+        
+        function displayValidationTableWithNames(validatedEntities, flaggedCount) {
+            const container = document.getElementById('validation-output');
+            
+            let tableHtml = `
+                <style>
+                    .entity-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-family: Arial, sans-serif;
+                        margin: 10px 0;
+                    }
+                    .entity-table th, .entity-table td {
+                        border: 1px solid #ddd;
+                        padding: 8px;
+                        text-align: left;
+                    }
+                    .entity-table th {
+                        background-color: #f2f2f2;
+                        font-weight: bold;
+                    }
+                    .entity-table tr:nth-child(even) {
+                        background-color: #f9f9f9;
+                    }
+                    .confidence-high { color: #00AA00; font-weight: bold; }
+                    .confidence-medium { color: #FFAA00; font-weight: bold; }
+                    .confidence-low { color: #FF6B6B; font-weight: bold; }
+                    .flag-correct { color: #00AA00; font-weight: bold; }
+                    .flag-review { color: #FF8C00; font-weight: bold; }
+                    .flag-uncertain { color: #FF6B6B; font-weight: bold; }
+                    .flag-likely_wrong { color: #DC143C; font-weight: bold; background-color: #FFE4E1; }
+                    .wikidata-link { 
+                        color: #0645ad; 
+                        text-decoration: none; 
+                        font-weight: bold;
+                    }
+                    .wikidata-link:hover { text-decoration: underline; }
+                    .action-btn {
+                        background: #4CAF50;
+                        color: white;
+                        border: none;
+                        padding: 4px 8px;
+                        border-radius: 3px;
+                        cursor: pointer;
+                        margin-right: 5px;
+                    }
+                    .edit-btn {
+                        background: #ff9800;
+                    }
+                    .similarity-score {
+                        font-size: 0.9em;
+                        font-family: monospace;
+                    }
+                </style>`;
+            
+            // Add summary
+            if (flaggedCount > 0) {
+                tableHtml += `
+                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+                        <strong>⚠️ Name Validation Alert:</strong> ${flaggedCount} entities have potential name mismatches. Review flagged items below.
+                    </div>
+                `;
+            } else {
+                tableHtml += `
+                    <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+                        <strong>✅ All entity names validated successfully</strong> against Wikidata canonical names.
+                    </div>
+                `;
+            }
+            
+            tableHtml += `
+                <table class="entity-table">
+                    <thead>
+                        <tr>
+                            <th>Extracted Name</th>
+                            <th>Wikidata Name</th>
+                            <th>Type</th>
+                            <th>Similarity</th>
+                            <th>Validation</th>
+                            <th>Position</th>
+                            <th>Confidence</th>
+                            <th>Wikidata ID</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            validatedEntities.forEach((entity, index) => {
+                const confidenceClass = entity.confidence > 0.8 ? 'confidence-high' :
+                                       entity.confidence > 0.6 ? 'confidence-medium' : 'confidence-low';
+                
+                const wikidataCell = entity.wikidata_id ? 
+                    `<a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank" class="wikidata-link">${entity.wikidata_id}</a>` :
+                    '<em>Not found</em>';
+                
+                // Format validation flag
+                let validationCell = '';
+                let flagClass = 'flag-correct';
+                let flagIcon = '✅';
+                let flagText = 'Good';
+                
+                switch(entity.flag_level) {
+                    case 'likely_wrong':
+                        flagClass = 'flag-likely_wrong';
+                        flagIcon = '❌';
+                        flagText = 'Likely Wrong';
+                        break;
+                    case 'uncertain':
+                        flagClass = 'flag-uncertain';
+                        flagIcon = '⚠️';
+                        flagText = 'Uncertain';
+                        break;
+                    case 'review':
+                        flagClass = 'flag-review';
+                        flagIcon = '👀';
+                        flagText = 'Review';
+                        break;
+                    case 'no_wikidata_id':
+                        flagClass = 'flag-review';
+                        flagIcon = '➖';
+                        flagText = 'No ID';
+                        break;
+                    case 'wikidata_fetch_failed':
+                        flagClass = 'flag-uncertain';
+                        flagIcon = '❓';
+                        flagText = 'Fetch Failed';
+                        break;
+                }
+                
+                validationCell = `<span class="${flagClass}">${flagIcon} ${flagText}</span>`;
+                
+                // Similarity score
+                const similarityScore = entity.name_similarity > 0 ? 
+                    `<span class="similarity-score">${(entity.name_similarity * 100).toFixed(0)}%</span>` : 
+                    '<span style="color: #999;">N/A</span>';
+                
+                // Wikidata name with tooltip
+                const wikidataName = entity.wikidata_name || '<em style="color: #999;">Not available</em>';
+                const wikidataNameCell = entity.alternative_names && entity.alternative_names.length > 0 ?
+                    `<span title="Alternative names: ${entity.alternative_names.join(', ')}">${wikidataName}</span>` :
+                    wikidataName;
+                
+                tableHtml += `
+                    <tr class="${entity.flag_level === 'likely_wrong' ? 'flag-likely_wrong' : ''}">
+                        <td><strong>${entity.text}</strong></td>
+                        <td>${wikidataNameCell}</td>
+                        <td>${entity.label}</td>
+                        <td>${similarityScore}</td>
+                        <td>${validationCell}</td>
+                        <td>${entity.start_pos || 0}-${entity.end_pos || 0}</td>
+                        <td class="${confidenceClass}">${entity.confidence.toFixed(2)}</td>
+                        <td>${wikidataCell}</td>
+                        <td>
+                            <button class="action-btn" onclick="validateEntity(${index})">✓</button>
+                            <button class="action-btn edit-btn" onclick="openEntityModal(${index})">✏️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tableHtml += `
+                    </tbody>
+                </table>
+                <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                    <strong>Legend:</strong> 
+                    <span class="confidence-high">●</span> High confidence (>0.8) |
+                    <span class="confidence-medium">●</span> Medium confidence (0.6-0.8) |
+                    <span class="confidence-low">●</span> Low confidence (<0.6)<br>
+                    <strong>Validation:</strong> 
+                    <span class="flag-correct">✅ Good</span> - Names match well |
+                    <span class="flag-review">👀 Review</span> - Manual review suggested |
+                    <span class="flag-uncertain">⚠️ Uncertain</span> - Low similarity |
+                    <span class="flag-likely_wrong">❌ Likely Wrong</span> - Very low similarity
+                </p>
+            `;
+            
+            container.innerHTML = tableHtml;
+        }
+
+        function displayOriginalValidationTable(entities) {
+            const container = document.getElementById('validation-output');
             
             let tableHtml = `
                 <style>

@@ -11,7 +11,7 @@ You are a coreference resolution assistant. Identify coreference relationships i
 
 # NER prompt template
 prompt_ner = """
-You are an expert Named Entity Recognition (NER) system with access to grounding tools. Your task is to identify entities in the given text and use grounding to find accurate Wikidata IDs.
+You are an expert Named Entity Recognition (NER) system with access to grounding tools. Your task is to identify entities in the given text and use search engines and grounding to find accurate Wikidata IDs.
 
 CRITICAL INSTRUCTIONS:
 1. ONLY use Wikidata IDs that you find through grounding searches - DO NOT make up or guess Wikidata IDs
@@ -32,10 +32,8 @@ ENTITIES FOUND:
 For each entity, provide:
 - Entity: [entity text]
 - Label: [entity type]  
-- Position: [start]-[end]
 - Wikidata ID: [ONLY use Q-numbers found in grounding results, otherwise use "NONE"]
 - Description: [description from grounding search results]
-- Confidence: [0.0-1.0 based on grounding search quality]
 
 5. Only use the labels provided by the user: {labels}
 6. Be precise and only annotate clear, unambiguous entities

@@ -7,6 +7,7 @@ from typing import List, Tuple, Dict, Any
 from src.llm import LLMProcessor
 import logging
 import os
+from difflib import SequenceMatcher
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,116 @@ def extract_entities(annotated_text: str) -> List[Tuple[str, str]]:
     """Extract entities and their labels from annotated text."""
     pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     return re.findall(pattern, annotated_text)
+
+def get_wikidata_name_and_info(wikidata_id: str) -> Dict[str, Any]:
+    """Get the canonical name, description, and other info for a Wikidata entity."""
+    try:
+        # SPARQL query to get name, description, and aliases
+        sparql_url = "https://query.wikidata.org/sparql"
+        
+        query = f"""
+        SELECT ?item ?itemLabel ?itemDescription ?itemAltLabel WHERE {{
+          VALUES ?item {{ wd:{wikidata_id} }}
+          SERVICE wikibase:label {{ 
+            bd:serviceParam wikibase:language "en". 
+          }}
+        }}
+        """
+        
+        headers = {
+            'User-Agent': 'Flask-NER-Demo/1.0 (https://github.com/example/ner-demo; contact@example.com)',
+            'Accept': 'application/sparql-results+json'
+        }
+        
+        response = requests.get(sparql_url, params={'query': query}, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('results', {}).get('bindings'):
+            binding = data['results']['bindings'][0]
+            
+            # Get all alternative labels if available
+            alt_labels = []
+            if 'itemAltLabel' in binding:
+                alt_label_value = binding['itemAltLabel'].get('value', '')
+                if alt_label_value:
+                    alt_labels = [label.strip() for label in alt_label_value.split(',')]
+            
+            return {
+                'wikidata_id': wikidata_id,
+                'canonical_name': binding.get('itemLabel', {}).get('value', ''),
+                'description': binding.get('itemDescription', {}).get('value', ''),
+                'alternative_names': alt_labels
+            }
+        
+        return {}
+        
+    except Exception as e:
+        logger.error(f"Error fetching name info for {wikidata_id}: {e}")
+        return {}
+
+def calculate_name_similarity(extracted_name: str, wikidata_name: str, alt_names: List[str] = None) -> Dict[str, Any]:
+    """Calculate similarity between extracted name and Wikidata canonical/alternative names."""
+    if not extracted_name or not wikidata_name:
+        return {'similarity': 0.0, 'is_likely_correct': False, 'match_type': 'no_data'}
+    
+    # Normalize names for comparison
+    extracted_clean = extracted_name.lower().strip()
+    canonical_clean = wikidata_name.lower().strip()
+    
+    # Calculate similarity with canonical name
+    canonical_similarity = SequenceMatcher(None, extracted_clean, canonical_clean).ratio()
+    
+    # Check if extracted name is a substring of canonical name or vice versa
+    substring_match = (extracted_clean in canonical_clean) or (canonical_clean in extracted_clean)
+    
+    # Check alternative names if available
+    alt_similarities = []
+    alt_substring_matches = []
+    
+    if alt_names:
+        for alt_name in alt_names:
+            alt_clean = alt_name.lower().strip()
+            alt_sim = SequenceMatcher(None, extracted_clean, alt_clean).ratio()
+            alt_similarities.append(alt_sim)
+            alt_substring_matches.append((extracted_clean in alt_clean) or (alt_clean in extracted_clean))
+    
+    # Determine best match
+    best_similarity = canonical_similarity
+    match_type = 'canonical'
+    
+    if alt_similarities:
+        max_alt_similarity = max(alt_similarities)
+        if max_alt_similarity > best_similarity:
+            best_similarity = max_alt_similarity
+            match_type = 'alternative'
+    
+    # Determine if likely correct based on multiple factors
+    is_likely_correct = (
+        best_similarity > 0.8 or  # High string similarity
+        substring_match or        # One name contains the other
+        any(alt_substring_matches) if alt_substring_matches else False or  # Alternative name match
+        (best_similarity > 0.6 and len(extracted_clean) > 3)  # Medium similarity for longer names
+    )
+    
+    # Flag as potentially wrong if similarity is very low
+    flag_level = 'correct'
+    if best_similarity < 0.3:
+        flag_level = 'likely_wrong'
+    elif best_similarity < 0.6:
+        flag_level = 'uncertain'
+    elif not is_likely_correct:
+        flag_level = 'review'
+    
+    return {
+        'similarity': best_similarity,
+        'canonical_similarity': canonical_similarity,
+        'is_likely_correct': is_likely_correct,
+        'match_type': match_type,
+        'flag_level': flag_level,
+        'substring_match': substring_match or any(alt_substring_matches) if alt_substring_matches else False
+    }
 
 def get_wikidata_coordinates(wikidata_id: str) -> Dict[str, Any]:
     """Get geographic coordinates for a Wikidata entity."""
@@ -227,6 +338,77 @@ def update_entity():
     except Exception as e:
         logger.error(f"Error updating entity: {e}")
         return jsonify({'error': 'Failed to update entity'}), 500
+
+@app.route('/api/entities/validate', methods=['POST'])
+def validate_entity_names():
+    """Validate entity names against Wikidata canonical names."""
+    try:
+        data = request.get_json()
+        entities = data.get('entities', [])
+        
+        validated_entities = []
+        
+        for entity in entities:
+            wikidata_id = entity.get('wikidata_id', '').strip()
+            extracted_name = entity.get('text', '').strip()
+            
+            # Create base validation info
+            validation_info = {
+                **entity,
+                'wikidata_name': '',
+                'name_similarity': 0.0,
+                'flag_level': 'no_wikidata_id',
+                'is_likely_correct': True,
+                'match_details': {}
+            }
+            
+            if wikidata_id and wikidata_id.startswith('Q'):
+                logger.info(f"Validating name for {wikidata_id}: '{extracted_name}'")
+                
+                # Get Wikidata name and info
+                name_info = get_wikidata_name_and_info(wikidata_id)
+                
+                if name_info and name_info.get('canonical_name'):
+                    wikidata_name = name_info['canonical_name']
+                    alt_names = name_info.get('alternative_names', [])
+                    
+                    # Calculate similarity
+                    similarity_info = calculate_name_similarity(
+                        extracted_name, 
+                        wikidata_name, 
+                        alt_names
+                    )
+                    
+                    validation_info.update({
+                        'wikidata_name': wikidata_name,
+                        'alternative_names': alt_names,
+                        'name_similarity': similarity_info['similarity'],
+                        'flag_level': similarity_info['flag_level'],
+                        'is_likely_correct': similarity_info['is_likely_correct'],
+                        'match_details': {
+                            'match_type': similarity_info['match_type'],
+                            'substring_match': similarity_info['substring_match'],
+                            'canonical_similarity': similarity_info['canonical_similarity']
+                        }
+                    })
+                    
+                    logger.info(f"Validation result for '{extracted_name}' vs '{wikidata_name}': {similarity_info['flag_level']} (similarity: {similarity_info['similarity']:.2f})")
+                else:
+                    validation_info['flag_level'] = 'wikidata_fetch_failed'
+                    logger.warning(f"Could not fetch name info for {wikidata_id}")
+            
+            validated_entities.append(validation_info)
+        
+        return jsonify({
+            'success': True,
+            'validated_entities': validated_entities,
+            'total_entities': len(entities),
+            'flagged_count': len([e for e in validated_entities if e['flag_level'] in ['likely_wrong', 'uncertain', 'review']])
+        })
+        
+    except Exception as e:
+        logger.error(f"Error validating entity names: {e}")
+        return jsonify({'error': f'Failed to validate names: {str(e)}'}), 500
 
 @app.route('/api/entities/coordinates', methods=['POST'])
 def get_entities_coordinates():
