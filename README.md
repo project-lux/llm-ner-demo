@@ -4,10 +4,14 @@ A Gradio web application that performs Named Entity Recognition (NER) using Goog
 
 ## Features
 
-- **Custom Entity Labels**: Add any entity labels you want (PERSON, LOCATION, ORGANIZATION, etc.)
-- **Three Output Views**:
+- **🌐 Real-time Google Search Grounding**: Finds accurate Wikidata IDs using live search
+- **🎯 Custom Entity Labels**: Add any entity labels you want (PERSON, LOCATION, ORGANIZATION, etc.)  
+- **🔄 Interactive Entity Editing**: Redo entity resolution or manually edit Wikidata IDs
+- **📊 Confidence Scoring**: View confidence levels for each entity identification
+- **Four Output Views**:
   - **Markdown Output**: Original text with entities annotated as `[entity](LABEL)`
-  - **Visualization**: Color-coded entities with labels
+  - **Visualization**: Color-coded entities with confidence indicators and Wikidata links
+  - **Entity Validation**: Interactive table with redo/edit capabilities
   - **Text Diff**: Shows differences between original and processed text
 
 ## Setup
@@ -29,11 +33,22 @@ python app.py
 ## Usage
 
 1. Enter text you want to analyze
-2. Specify entity labels (comma-separated, e.g., "PERSON, LOCATION, ORGANIZATION")
-3. Click "Process Text" to see results in all three formats
+2. Specify entity labels (comma-separated, e.g., "PERSON, LOCATION, ORGANIZATION")  
+3. Click "Process Text" to see results in all four formats
+4. **Interactive Entity Editing**:
+   - Go to the "🔍 Entity Validation" tab
+   - **Edit Wikidata IDs directly** in the table by clicking on the Q-codes
+   - Click "🔄" in the Actions column to search for better Wikidata IDs (feature coming soon)
+   - Changes update the Wikidata links automatically
 
 ## Example
 
-Input text: "Tom went to Rome yesterday."
-Labels: "PERSON, LOCATION"
-Output: "[Tom](PERSON) went to [Rome](LOCATION) yesterday."
+**Input:** "Albert Einstein was born in Germany. Microsoft was founded by Bill Gates."  
+**Labels:** "PERSON, LOCATION, ORGANIZATION"  
+**Output:** "[Albert Einstein](PERSON) was born in [Germany](LOCATION). [Microsoft](ORGANIZATION) was founded by [Bill Gates](PERSON)."
+
+**With Grounding:**
+- Albert Einstein → Q937 (German-born theoretical physicist)
+- Germany → Q183 (Federal Republic of Germany)  
+- Microsoft → Q2283 (American technology corporation)
+- Bill Gates → Q5284 (American businessman)

@@ -336,3 +336,170 @@ class LLMProcessor:
                 "annotated_text": text,
                 "entities": []
             }
+    
+    def redo_single_entity(self, entity_text: str, entity_label: str, context_text: str = "") -> Dict[str, Any]:
+        """Re-process a single entity to find better Wikidata ID and description"""
+        try:
+            # Create a focused prompt for single entity resolution
+            focused_prompt = f"""
+You are an expert entity resolution system with access to grounding tools. Your task is to find the most accurate Wikidata ID for a specific entity.
+
+CRITICAL INSTRUCTIONS:
+1. ONLY use Wikidata IDs that you find through grounding searches
+2. Use grounding tools to search for "[entity_text] {entity_label.lower()} wikidata"
+3. If multiple candidates exist, choose the most relevant one based on context
+4. Return NONE if no clear match is found
+
+Entity to resolve: "{entity_text}"
+Entity type: {entity_label}
+Context: {context_text if context_text else "No additional context"}
+
+Search using grounding tools and return the result in this format:
+
+ENTITY RESOLUTION:
+- Entity: {entity_text}
+- Label: {entity_label}
+- Wikidata ID: [Q-number from grounding or NONE]
+- Description: [description from grounding]
+- Confidence: [0.0-1.0]
+
+Use grounding tools to search for accurate information about this specific entity.
+"""
+            
+            logger.info(f"Re-processing entity: {entity_text} ({entity_label})")
+            
+            # Generate content using grounding
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=focused_prompt,
+                config=self.ner_config_with_grounding
+            )
+            
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                
+                if candidate.content and candidate.content.parts:
+                    result = candidate.content.parts[0].text.strip()
+                    logger.info(f"Raw redo response: {result}")
+                    
+                    # Parse the single entity response
+                    entity_data = self._parse_single_entity_response(result)
+                    if entity_data:
+                        return {
+                            "success": True,
+                            "entity": entity_data
+                        }
+            
+            return {
+                "success": False,
+                "error": "No valid response from model"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in single entity redo: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def _parse_single_entity_response(self, response_text: str) -> Dict[str, Any]:
+        """Parse the response for a single entity resolution"""
+        import re
+        
+        entity = {}
+        
+        # Extract fields using regex
+        entity_match = re.search(r'- Entity:\s*(.+?)(?=\n|$)', response_text, re.MULTILINE)
+        label_match = re.search(r'- Label:\s*(.+?)(?=\n|$)', response_text, re.MULTILINE)
+        wikidata_match = re.search(r'- Wikidata ID:\s*(.+?)(?=\n|$)', response_text, re.MULTILINE)
+        description_match = re.search(r'- Description:\s*(.+?)(?=\n|$)', response_text, re.MULTILINE)
+        confidence_match = re.search(r'- Confidence:\s*([0-9.]+)', response_text)
+        
+        if entity_match and label_match:
+            entity["text"] = entity_match.group(1).strip()
+            entity["label"] = label_match.group(1).strip()
+            
+            if wikidata_match:
+                wikidata_id = wikidata_match.group(1).strip()
+                if wikidata_id and wikidata_id not in ["N/A", "None", "NONE", "null"]:
+                    if wikidata_id.startswith("Q") and wikidata_id[1:].isdigit():
+                        entity["wikidata_id"] = wikidata_id
+                    else:
+                        entity["wikidata_id"] = ""
+                else:
+                    entity["wikidata_id"] = ""
+            
+            if description_match:
+                entity["description"] = description_match.group(1).strip()
+            
+            if confidence_match:
+                entity["confidence"] = float(confidence_match.group(1))
+            else:
+                entity["confidence"] = 0.5
+                
+            return entity
+        
+        return None
+    
+    def simple_wikidata_lookup(self, entity_text: str, entity_label: str) -> Dict[str, Any]:
+        """Simple function to look up Wikidata ID for an entity using LLM"""
+        try:
+            # Create a simple prompt for Wikidata lookup
+            lookup_prompt = f"""
+You are a Wikidata expert. Your task is to find the most accurate Wikidata ID for an entity.
+
+Entity: "{entity_text}"
+Type: {entity_label}
+
+Instructions:
+1. Use grounding tools to search for "{entity_text} {entity_label.lower()} wikidata"
+2. Find the most relevant Wikidata ID (Q-number)
+3. Respond with ONLY the Wikidata ID (e.g., Q12345) or "NONE" if not found
+
+Search for the entity and return the Wikidata ID:
+"""
+            
+            logger.info(f"Looking up Wikidata ID for: {entity_text} ({entity_label})")
+            
+            # Generate content using grounding
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=lookup_prompt,
+                config=self.ner_config_with_grounding
+            )
+            
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                
+                if candidate.content and candidate.content.parts:
+                    result = candidate.content.parts[0].text.strip()
+                    logger.info(f"Raw lookup response: {result}")
+                    
+                    # Extract Wikidata ID from response
+                    import re
+                    wikidata_match = re.search(r'Q\d+', result)
+                    if wikidata_match:
+                        wikidata_id = wikidata_match.group(0)
+                        if self._validate_wikidata_id(entity_text, wikidata_id):
+                            return {
+                                "success": True,
+                                "wikidata_id": wikidata_id,
+                                "description": f"Found via lookup"
+                            }
+                    
+                    return {
+                        "success": False,
+                        "error": "No valid Wikidata ID found"
+                    }
+            
+            return {
+                "success": False,
+                "error": "No response from model"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in simple Wikidata lookup: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
