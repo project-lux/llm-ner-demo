@@ -37,6 +37,55 @@ def extract_entities(annotated_text: str) -> List[Tuple[str, str]]:
     pattern = r'\[([^\]]+)\]\(([^)]+)\)'
     return re.findall(pattern, annotated_text)
 
+def get_wikidata_coordinates(wikidata_id: str) -> Dict[str, Any]:
+    """Get geographic coordinates for a Wikidata entity."""
+    try:
+        # SPARQL query to get coordinates
+        sparql_url = "https://query.wikidata.org/sparql"
+        
+        query = f"""
+        SELECT ?item ?itemLabel ?coord WHERE {{
+          VALUES ?item {{ wd:{wikidata_id} }}
+          ?item wdt:P625 ?coord.
+          SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+        }}
+        """
+        
+        headers = {
+            'User-Agent': 'Flask-NER-Demo/1.0 (https://github.com/example/ner-demo; contact@example.com)',
+            'Accept': 'application/sparql-results+json'
+        }
+        
+        response = requests.get(sparql_url, params={'query': query}, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if data.get('results', {}).get('bindings'):
+            binding = data['results']['bindings'][0]
+            coord_value = binding.get('coord', {}).get('value', '')
+            
+            # Parse coordinate string like "Point(longitude latitude)"
+            import re
+            coord_match = re.search(r'Point\(([+-]?\d+\.?\d*)\s+([+-]?\d+\.?\d*)\)', coord_value)
+            if coord_match:
+                longitude = float(coord_match.group(1))
+                latitude = float(coord_match.group(2))
+                
+                return {
+                    'wikidata_id': wikidata_id,
+                    'label': binding.get('itemLabel', {}).get('value', ''),
+                    'latitude': latitude,
+                    'longitude': longitude,
+                    'coordinate_string': coord_value
+                }
+        
+        return {}
+        
+    except Exception as e:
+        logger.error(f"Error fetching coordinates for {wikidata_id}: {e}")
+        return {}
+
 def search_wikidata(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Search Wikidata for entities matching the query."""
     try:
@@ -178,6 +227,45 @@ def update_entity():
     except Exception as e:
         logger.error(f"Error updating entity: {e}")
         return jsonify({'error': 'Failed to update entity'}), 500
+
+@app.route('/api/entities/coordinates', methods=['POST'])
+def get_entities_coordinates():
+    """Get coordinates for entities with Wikidata IDs."""
+    try:
+        data = request.get_json()
+        entities = data.get('entities', [])
+        
+        geolocated_entities = []
+        
+        for entity in entities:
+            wikidata_id = entity.get('wikidata_id', '').strip()
+            if wikidata_id and wikidata_id.startswith('Q'):
+                logger.info(f"Fetching coordinates for {wikidata_id}")
+                coordinates = get_wikidata_coordinates(wikidata_id)
+                
+                if coordinates:
+                    # Merge entity data with coordinates
+                    geolocated_entity = {
+                        **entity,
+                        'latitude': coordinates['latitude'],
+                        'longitude': coordinates['longitude'],
+                        'coordinate_string': coordinates['coordinate_string']
+                    }
+                    geolocated_entities.append(geolocated_entity)
+                    logger.info(f"Found coordinates for {entity['text']}: {coordinates['latitude']}, {coordinates['longitude']}")
+                else:
+                    logger.info(f"No coordinates found for {wikidata_id}")
+        
+        return jsonify({
+            'success': True,
+            'geolocated_entities': geolocated_entities,
+            'total_entities': len(entities),
+            'geolocated_count': len(geolocated_entities)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting entity coordinates: {e}")
+        return jsonify({'error': f'Failed to get coordinates: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Create templates and static directories if they don't exist

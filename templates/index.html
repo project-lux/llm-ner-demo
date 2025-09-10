@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NER Demo with LLM - Flask Version</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * {
             margin: 0;
@@ -421,6 +423,23 @@
             color: #1976d2;
         }
 
+        /* Map specific styles */
+        #map-container {
+            position: relative;
+        }
+        
+        #map {
+            height: 400px !important;
+            width: 100% !important;
+            border-radius: 6px;
+        }
+        
+        .leaflet-container {
+            height: 400px !important;
+            width: 100% !important;
+            border-radius: 6px;
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -432,6 +451,10 @@
             
             .feature {
                 font-size: 0.8em;
+            }
+            
+            #map, .leaflet-container {
+                height: 300px !important;
             }
         }
     </style>
@@ -522,6 +545,10 @@
                         <i class="fas fa-check-circle"></i>
                         Entity Validation
                     </button>
+                    <button class="tab" onclick="switchTab('map')">
+                        <i class="fas fa-map-marked-alt"></i>
+                        Map View
+                    </button>
                     <button class="tab" onclick="switchTab('diff')">
                         <i class="fas fa-code-branch"></i>
                         Text Diff
@@ -545,7 +572,21 @@
                         <em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>
                     </div>
                 </div>
-
+                
+                <div id="map-tab" class="tab-content">
+                    <div id="map-container" style="height: 400px; width: 100%; border: 2px solid #e1e5e9; border-radius: 8px; background: #f8f9fa;">
+                        <div id="map-loading" style="display: flex; align-items: center; justify-content: center; height: 100%; color: #666;">
+                            <em>Map will load here once entities with geographic locations are found</em>
+                        </div>
+                        <div id="map" style="height: 100%; width: 100%; display: none;"></div>
+                    </div>
+                    <div id="map-info" style="margin-top: 15px; padding: 10px; background: white; border-radius: 8px; border: 1px solid #e1e5e9;">
+                        <div id="map-stats" style="color: #666; font-size: 0.9em;">
+                            Geographic entities will be plotted on the map above
+                        </div>
+                    </div>
+                </div>
+                
                 <div id="diff-tab" class="tab-content">
                     <div class="output-box" id="diff-output">
                         <em style="color: #666;">Text differences will appear here</em>
@@ -560,16 +601,16 @@
         </div>
 
         <div class="examples">
-            <h3><i class="fas fa-lightbulb"></i> Example Texts to Try:</h3>
+            <h3><i class="fas fa-lightbulb"></i> Example Texts to Try (with Geographic Entities):</h3>
             <ul>
                 <li onclick="loadExample('news')">
-                    <strong>News:</strong> "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners."
+                    <strong>News:</strong> "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners in Paris and Berlin."
                 </li>
                 <li onclick="loadExample('biography')">
-                    <strong>Biography:</strong> "Albert Einstein was born in Germany in 1879 and later moved to Princeton University in New Jersey."
+                    <strong>Biography:</strong> "Albert Einstein was born in Ulm, Germany in 1879 and later moved to Princeton University in New Jersey, after living in Switzerland and working in Berlin."
                 </li>
                 <li onclick="loadExample('business')">
-                    <strong>Business:</strong> "The merger between Disney and Fox was completed in 2019 for $71.3 billion."
+                    <strong>Business:</strong> "The merger between Disney and Fox was completed in 2019 for $71.3 billion, affecting operations in Los Angeles, New York, and London."
                 </li>
             </ul>
         </div>
@@ -626,13 +667,20 @@
             // Add active class to selected tab and content
             event.target.classList.add('active');
             document.getElementById(tabName + '-tab').classList.add('active');
+            
+            // If switching to map tab, refresh the map size
+            if (tabName === 'map' && map) {
+                setTimeout(() => {
+                    map.invalidateSize();
+                }, 100);
+            }
         }
 
         function loadExample(type) {
             const examples = {
-                'news': "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners.",
-                'biography': "Albert Einstein was born in Germany in 1879 and later moved to Princeton University in New Jersey.",
-                'business': "The merger between Disney and Fox was completed in 2019 for $71.3 billion."
+                'news': "Apple Inc. announced that Tim Cook will visit London next month to meet with European partners in Paris and Berlin.",
+                'biography': "Albert Einstein was born in Ulm, Germany in 1879 and later moved to Princeton University in New Jersey, after living in Switzerland and working in Berlin.",
+                'business': "The merger between Disney and Fox was completed in 2019 for $71.3 billion, affecting operations in Los Angeles, New York, and London."
             };
             
             const labels = {
@@ -701,6 +749,7 @@
             displayMarkdownOutput(result.annotated_text);
             displayVisualization(result);
             displayValidationTable(result);
+            displayMapVisualization(result);
             displayTextDiff(originalText, result.annotated_text);
         }
 
@@ -853,6 +902,145 @@
             `;
             
             container.innerHTML = tableHtml;
+        }
+
+        let map = null;
+        let mapMarkers = [];
+        
+        async function displayMapVisualization(result) {
+            const mapContainer = document.getElementById('map-container');
+            const mapElement = document.getElementById('map');
+            const mapLoading = document.getElementById('map-loading');
+            const mapStats = document.getElementById('map-stats');
+            
+            // Show loading
+            mapLoading.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching geographic coordinates...';
+            mapLoading.style.display = 'flex';
+            mapElement.style.display = 'none';
+            
+            if (!result.entities || result.entities.length === 0) {
+                mapLoading.innerHTML = '<em>No entities found to map</em>';
+                mapStats.textContent = 'No entities available for mapping';
+                return;
+            }
+            
+            try {
+                // Get coordinates for entities
+                const response = await fetch('/api/entities/coordinates', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ entities: result.entities })
+                });
+                
+                const data = await response.json();
+                console.log('Coordinates response:', data);
+                
+                if (data.success && data.geolocated_entities.length > 0) {
+                    // Show map element first
+                    mapLoading.style.display = 'none';
+                    mapElement.style.display = 'block';
+                    
+                    // Initialize or update the map after a short delay
+                    setTimeout(() => {
+                        initializeMap(data.geolocated_entities);
+                    }, 100);
+                    
+                    // Update stats
+                    mapStats.innerHTML = `
+                        <strong>Geographic Entities:</strong> ${data.geolocated_count} of ${data.total_entities} entities have geographic coordinates<br>
+                        <small>Click on map markers to see entity details</small>
+                    `;
+                } else {
+                    mapLoading.innerHTML = '<em>No entities with geographic coordinates found</em>';
+                    mapStats.textContent = `Checked ${data.total_entities} entities - no geographic coordinates available`;
+                }
+                
+            } catch (error) {
+                console.error('Error fetching coordinates:', error);
+                mapLoading.innerHTML = '<em style="color: red;">Error loading map data</em>';
+                mapStats.textContent = 'Failed to fetch geographic coordinates';
+            }
+        }
+        
+        function initializeMap(geolocatedEntities) {
+            const mapElement = document.getElementById('map');
+            
+            // Clear existing markers
+            if (map) {
+                mapMarkers.forEach(marker => map.removeLayer(marker));
+                mapMarkers = [];
+                // Invalidate size to refresh the map
+                setTimeout(() => map.invalidateSize(), 100);
+            } else {
+                // Initialize the map
+                map = L.map('map').setView([40.7128, -74.0060], 2); // Default to world view
+                
+                // Add tile layer
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(map);
+                
+                // Force size invalidation after initialization
+                setTimeout(() => {
+                    if (map) {
+                        map.invalidateSize();
+                    }
+                }, 200);
+            }
+            
+            // Add markers for each geolocated entity
+            const bounds = [];
+            
+            geolocatedEntities.forEach(entity => {
+                const lat = entity.latitude;
+                const lng = entity.longitude;
+                
+                // Create custom icon based on entity type
+                const iconColor = getEntityTypeColor(entity.label);
+                
+                // Create marker with popup
+                const marker = L.marker([lat, lng]).addTo(map);
+                
+                const popupContent = `
+                    <div style="min-width: 200px;">
+                        <h4 style="margin: 0 0 8px 0; color: ${iconColor};">${entity.text}</h4>
+                        <p style="margin: 0 0 4px 0;"><strong>Type:</strong> ${entity.label}</p>
+                        <p style="margin: 0 0 4px 0;"><strong>Confidence:</strong> ${entity.confidence.toFixed(2)}</p>
+                        ${entity.wikidata_id ? `<p style="margin: 0 0 4px 0;"><strong>Wikidata:</strong> <a href="https://www.wikidata.org/wiki/${entity.wikidata_id}" target="_blank">${entity.wikidata_id}</a></p>` : ''}
+                        ${entity.description ? `<p style="margin: 0 0 4px 0;"><strong>Description:</strong> ${entity.description}</p>` : ''}
+                        <p style="margin: 4px 0 0 0; font-size: 0.9em; color: #666;">
+                            <strong>Coordinates:</strong> ${lat.toFixed(4)}, ${lng.toFixed(4)}
+                        </p>
+                    </div>
+                `;
+                
+                marker.bindPopup(popupContent);
+                mapMarkers.push(marker);
+                bounds.push([lat, lng]);
+            });
+            
+            // Fit map to show all markers
+            if (bounds.length > 0) {
+                if (bounds.length === 1) {
+                    map.setView(bounds[0], 10);
+                } else {
+                    map.fitBounds(bounds, { padding: [20, 20] });
+                }
+            }
+        }
+        
+        function getEntityTypeColor(entityType) {
+            const colors = {
+                'PERSON': '#FF6B6B',
+                'LOCATION': '#4ECDC4', 
+                'ORGANIZATION': '#45B7D1',
+                'GPE': '#96CEB4',
+                'FACILITY': '#FFEAA7',
+                'DEFAULT': '#DDA0DD'
+            };
+            return colors[entityType] || colors['DEFAULT'];
         }
 
         function displayTextDiff(originalText, annotatedText) {
@@ -1010,6 +1198,17 @@
             document.getElementById('visualization-output').innerHTML = '<em style="color: #666;">Processed text will appear here with color-coded entities and Wikidata links</em>';
             document.getElementById('validation-output').innerHTML = '<em style="color: #666;">Entity validation table with Wikidata IDs and confidence scores will appear here</em>';
             document.getElementById('diff-output').innerHTML = '<em style="color: #666;">Text differences will appear here</em>';
+            
+            // Clear map
+            document.getElementById('map-loading').innerHTML = '<em>Map will load here once entities with geographic locations are found</em>';
+            document.getElementById('map-loading').style.display = 'flex';
+            document.getElementById('map').style.display = 'none';
+            document.getElementById('map-stats').textContent = 'Geographic entities will be plotted on the map above';
+            
+            if (map) {
+                mapMarkers.forEach(marker => map.removeLayer(marker));
+                mapMarkers = [];
+            }
         }
 
         function showError(message) {
