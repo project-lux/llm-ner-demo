@@ -50,24 +50,41 @@ def search_wikidata(query: str, limit: int = 10) -> List[Dict[str, Any]]:
             'limit': limit
         }
         
-        response = requests.get(url, params=params, timeout=10)
+        # Add User-Agent header to avoid 403 errors
+        headers = {
+            'User-Agent': 'Flask-NER-Demo/1.0 (https://github.com/example/ner-demo; contact@example.com)'
+        }
+        
+        logger.info(f"Making Wikidata API request: {url} with params: {params}")
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         response.raise_for_status()
         
         data = response.json()
+        logger.info(f"Wikidata API response: {data}")
         
         results = []
-        for item in data.get('search', []):
-            results.append({
+        search_results = data.get('search', [])
+        
+        for item in search_results:
+            result_item = {
                 'id': item.get('id', ''),
                 'label': item.get('label', ''),
                 'description': item.get('description', ''),
                 'url': f"https://www.wikidata.org/wiki/{item.get('id', '')}"
-            })
+            }
+            results.append(result_item)
         
+        logger.info(f"Processed {len(results)} Wikidata results")
         return results
     
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error searching Wikidata: {e}")
+        return []
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error from Wikidata response: {e}")
+        return []
     except Exception as e:
-        logger.error(f"Error searching Wikidata: {e}")
+        logger.error(f"Unexpected error searching Wikidata: {e}")
         return []
 
 @app.route('/')
@@ -121,17 +138,25 @@ def search_wikidata_api():
     """Search Wikidata for entities."""
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+            
         query = data.get('query', '').strip()
+        logger.info(f"Wikidata search request for query: '{query}'")
         
         if not query:
             return jsonify({'error': 'Query is required'}), 400
         
+        if len(query) < 2:
+            return jsonify({'results': []})
+        
         results = search_wikidata(query)
+        logger.info(f"Found {len(results)} results for query '{query}'")
         return jsonify({'results': results})
         
     except Exception as e:
         logger.error(f"Error in Wikidata search: {e}")
-        return jsonify({'error': 'Failed to search Wikidata'}), 500
+        return jsonify({'error': f'Failed to search Wikidata: {str(e)}'}), 500
 
 @app.route('/api/entity/update', methods=['POST'])
 def update_entity():

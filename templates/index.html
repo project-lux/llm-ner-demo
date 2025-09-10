@@ -890,13 +890,18 @@
 
         async function searchWikidata() {
             const query = document.getElementById('wikidata-search').value.trim();
+            console.log('Searching Wikidata for:', query);
             
             if (!query) {
                 document.getElementById('search-results').innerHTML = '';
                 return;
             }
             
+            // Show loading indicator
+            document.getElementById('search-results').innerHTML = '<p><i class="fas fa-spinner fa-spin"></i> Searching...</p>';
+            
             try {
+                console.log('Making request to /api/wikidata/search');
                 const response = await fetch('/api/wikidata/search', {
                     method: 'POST',
                     headers: {
@@ -905,9 +910,13 @@
                     body: JSON.stringify({ query: query })
                 });
                 
+                console.log('Response status:', response.status);
                 const data = await response.json();
+                console.log('Response data:', data);
                 
-                if (data.results) {
+                if (data.error) {
+                    document.getElementById('search-results').innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+                } else if (data.results && data.results.length > 0) {
                     displaySearchResults(data.results);
                 } else {
                     document.getElementById('search-results').innerHTML = '<p>No results found.</p>';
@@ -915,7 +924,7 @@
                 
             } catch (error) {
                 console.error('Error searching Wikidata:', error);
-                document.getElementById('search-results').innerHTML = '<p>Error searching Wikidata.</p>';
+                document.getElementById('search-results').innerHTML = `<p style="color: red;">Network error: ${error.message}</p>`;
             }
         }
 
@@ -1030,10 +1039,18 @@
         }
 
         // Add event listeners
+        let searchTimeout;
         document.getElementById('wikidata-search').addEventListener('input', function() {
             const query = this.value.trim();
+            
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+            
             if (query.length > 2) {
-                setTimeout(searchWikidata, 300); // Debounce
+                // Debounce the search
+                searchTimeout = setTimeout(() => searchWikidata(), 300);
             } else {
                 document.getElementById('search-results').innerHTML = '';
             }
